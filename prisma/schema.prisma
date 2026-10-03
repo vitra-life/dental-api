@@ -1,0 +1,23 @@
+// Field names are snake_case on purpose: they are returned as-is by the API
+// and match the row types in the frontend (Dental-App/src/lib/types.ts).
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+/// A tenant. Every other table will carry a `clinic_id` pointing here.
+model Clinic {
+  id         String   @id @default(uuid(7)) @db.Char(36)
+  name       String   @db.VarChar(255)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("clinics")
+}
