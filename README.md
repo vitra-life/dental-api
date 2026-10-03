@@ -1,124 +1,83 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Dental API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Backend of the dental clinic management app (`../Dental-App`). NestJS 12, Prisma 7.10.0, MySQL 9.7.2.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Requirements
 
-## Description
+- Node.js 24 or newer
+- Docker (for the local MySQL container)
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
+## First run
 
 ```bash
-$ npm install
+npm install
+cp .env.example .env      # then set the two MySQL passwords and DATABASE_URL
+npm run db:up             # start MySQL and wait until it is healthy
+npm run db:deploy         # apply the migrations
+npm run db:generate       # generate the Prisma client into src/generated/prisma
+npm run start:dev
 ```
 
-## Compile and run the project
+The server listens on `PORT` (default 3000):
+
+| URL | What |
+|---|---|
+| `/health` | Liveness and database check |
+| `/api/docs` | Swagger UI, when `SWAGGER_ENABLED=true` |
+| `/api/v1/...` | The API |
+
+The app refuses to start if an environment variable is missing or malformed (`src/config/env.ts`) or if the database cannot be reached.
+
+## Commands
 
 ```bash
-# development
-$ npm run start
+npm run start:dev     # watch mode
+npm run build         # generates the Prisma client, then compiles to dist/
+npm run start:prod    # node dist/main
+npm run typecheck
+npm run lint
+npm run format
+npm test              # unit tests (*.spec.ts)
+npm run test:e2e      # end-to-end tests (test/*.e2e-spec.ts), needs MySQL running
 
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+npm run db:up         # start MySQL
+npm run db:down       # stop it (data is kept in a Docker volume)
+npm run db:migrate    # create and apply a migration after editing prisma/schema.prisma
+npm run db:deploy     # apply existing migrations (CI, production)
+npm run db:generate   # regenerate the Prisma client
+npm run db:studio     # browse the data
 ```
 
-## Run tests
+The generated Prisma client (`src/generated/prisma`) is git-ignored. Run `npm run db:generate` after `npm install` and after every schema change; `npm run build` does it for you.
 
-```bash
-# unit tests
-$ npm run test
+## Layout
 
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+```
+prisma/
+  schema.prisma          data model (snake_case field names, returned as-is by the API)
+  migrations/            SQL migrations, committed
+prisma7.config.ts        Prisma CLI config; loads .env
+docker-compose.yml       local MySQL
+src/
+  main.ts                bootstrap: logger, helmet, CORS, Swagger
+  app.setup.ts           route prefix and versioning, shared with the e2e tests
+  app.module.ts          root module; global validation pipe and exception filter
+  config/env.ts          environment schema
+  prisma/                PrismaService (global)
+  health/                /health
+  common/
+    filters/             AllExceptionsFilter: the one error format
+    pipes/               request validation
+    logger/              request logging and request ids
+    dto/                 shared DTOs
+test/                    end-to-end tests
 ```
 
-## Deployment
+## Conventions
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Observability
-
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
-
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
-
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
-
-To add it to this project:
-
-```bash
-$ npm install @nestjs/observe
-```
-
-Then follow the [setup guide](https://docs.nestjs.com/observability/overview) - it takes a single import and an app key.
-
-The free plan needs no payment details and covers 300,000 events a month. You can also browse the [live demo](https://www.observe-demo.nestjs.com/dashboard) first - the whole dashboard over a busy service's data, with nothing to install.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observe](https://observe.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+- **ES modules:** relative imports end in `.js`.
+- **JSON is snake_case**, in requests and responses.
+- **Errors** all have the shape of `ErrorResponseDto`: `status_code`, `error`, `message`, optional `details`, `path`, `request_id`, `timestamp`. Throw Nest's HTTP exceptions; do not build error bodies by hand.
+- **Validation:** DTO classes with `class-validator` decorators. Fields the DTO does not declare are rejected.
+- **Request ids:** every response carries `x-request-id`; the same id is on every log line of that request.
+- **Dependency versions are pinned exactly** (`npm install --save-exact`).
