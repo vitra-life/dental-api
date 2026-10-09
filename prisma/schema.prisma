@@ -19,5 +19,72 @@ model Clinic {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
+  clients      Client[]
+  services     Service[]
+  appointments Appointment[]
+
   @@map("clinics")
+}
+
+enum Gender {
+  male
+  female
+}
+
+model Client {
+  id          String    @id @default(uuid(7)) @db.Char(36)
+  clinic_id   String    @db.Char(36)
+  first_name  String    @db.VarChar(100)
+  last_name   String    @db.VarChar(100)
+  phone       String    @db.VarChar(11)
+  national_id String?   @db.Char(10)
+  birth_date  DateTime? @db.Date
+  gender      Gender
+  email       String?   @db.VarChar(255)
+  /// One of A+, A-, B+, B-, AB+, AB-, O+, O-. Validated by the API.
+  blood_type  String?   @db.VarChar(3)
+  address     String?   @db.Text
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+
+  clinic       Clinic        @relation(fields: [clinic_id], references: [id])
+  appointments Appointment[]
+
+  @@unique([clinic_id, phone])
+  @@map("clients")
+}
+
+model Service {
+  id         String   @id @default(uuid(7)) @db.Char(36)
+  clinic_id  String   @db.Char(36)
+  name       String   @db.VarChar(255)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  clinic       Clinic        @relation(fields: [clinic_id], references: [id])
+  appointments Appointment[]
+
+  @@unique([clinic_id, name])
+  @@map("services")
+}
+
+model Appointment {
+  id          String   @id @default(uuid(7)) @db.Char(36)
+  clinic_id   String   @db.Char(36)
+  client_id   String   @db.Char(36)
+  service_id  String   @db.Char(36)
+  /// Stored in UTC.
+  start_time  DateTime
+  description String?  @db.Text
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  clinic  Clinic  @relation(fields: [clinic_id], references: [id])
+  client  Client  @relation(fields: [client_id], references: [id], onDelete: Restrict)
+  service Service @relation(fields: [service_id], references: [id], onDelete: Restrict)
+
+  @@index([clinic_id, start_time])
+  @@index([client_id])
+  @@index([service_id])
+  @@map("appointments")
 }
