@@ -65,7 +65,12 @@ src/
   config/env.ts          environment schema
   prisma/                PrismaService (global)
   health/                /health
+  services/              /api/v1/services
+  clients/               /api/v1/clients
+  appointments/          /api/v1/appointments (edit, status changes)
   common/
+    clinic/              ClinicGuard, @ClinicScoped(), @ClinicId(): which clinic a request acts for
+    validators/          mobile, national id, blood type, dates, digit and trim transforms
     filters/             AllExceptionsFilter: the one error format
     pipes/               request validation
     logger/              request logging and request ids
@@ -78,6 +83,10 @@ test/                    end-to-end tests
 - **ES modules:** relative imports end in `.js`.
 - **JSON is snake_case**, in requests and responses.
 - **Errors** all have the shape of `ErrorResponseDto`: `status_code`, `error`, `message`, optional `details`, `path`, `request_id`, `timestamp`. Throw Nest's HTTP exceptions; do not build error bodies by hand.
+- **Clinic scoping:** every clinic-owned route needs the `x-clinic-id` header (a clinic's id) until login exists; then the clinic will come from the token and only `ClinicGuard` changes. Every query filters by `clinic_id`, so another clinic's record is a 404.
+- **Dates:** date-times are ISO 8601 with a time zone and are returned in UTC. Date-only fields (`birth_date`) are `YYYY-MM-DD`.
+- **Money** is integer Rial.
+- **Updates** are `PATCH` with any subset of fields; `null` clears an optional field and is rejected for a required one.
 - **Validation:** DTO classes with `class-validator` decorators. Fields the DTO does not declare are rejected.
 - **Request ids:** every response carries `x-request-id`; the same id is on every log line of that request.
 - **Dependency versions are pinned exactly** (`npm install --save-exact`).
