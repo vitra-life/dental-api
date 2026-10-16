@@ -1,6 +1,6 @@
 import { plainToInstance } from 'class-transformer';
 import { IsOptional, validateSync } from 'class-validator';
-import { IsBloodType } from './blood-type.js';
+import { IsBloodType } from '../../modules/clients/blood-type.js';
 import { IsDateTimeWithZone, IsPastDate, todayInIran } from './dates.js';
 import { IsIranianMobile } from './iranian-mobile.js';
 import { isValidNationalId, IsNationalId } from './national-id.js';

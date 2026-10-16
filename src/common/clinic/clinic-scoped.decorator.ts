@@ -4,7 +4,7 @@ import {
   ApiHeader,
   ApiNotFoundResponse,
 } from '@nestjs/swagger';
-import { ErrorResponseDto } from '../dto/error-response.dto.js';
+import { ErrorResponseDto } from '../../core/http/error-response.dto.js';
 import { CLINIC_HEADER } from './clinic-request.js';
 import { ClinicGuard } from './clinic.guard.js';
 

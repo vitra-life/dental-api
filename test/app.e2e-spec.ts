@@ -2,8 +2,8 @@ import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
-import { AppModule } from './../src/app.module.js';
-import { configureApp } from './../src/app.setup.js';
+import { AppModule } from '../src/app.module.js';
+import { configureApp } from '../src/app.setup.js';
 
 // Needs the MySQL container running (`npm run db:up`).
 describe('App (e2e)', () => {
