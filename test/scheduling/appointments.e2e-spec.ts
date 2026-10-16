@@ -255,7 +255,7 @@ describe('Appointments (e2e)', () => {
         .expect(400);
       await api
         .get(
-          '/api/v1/appointments?from=2026-01-01T00:00:00Z&to=2026-12-01T00:00:00Z',
+          '/api/v1/appointments?from=2025-01-01T00:00:00Z&to=2026-12-01T00:00:00Z',
         )
         .expect(400);
     });

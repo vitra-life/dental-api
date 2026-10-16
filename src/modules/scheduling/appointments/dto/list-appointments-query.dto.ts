@@ -12,7 +12,7 @@ export class ListAppointmentsQueryDto {
   @IsDateTimeWithZone()
   from?: string;
 
-  /** Appointments starting before this moment. At most 93 days after `from`. */
+  /** Appointments starting before this moment. At most 366 days after `from`. */
   @ApiPropertyOptional({ example: '2026-11-01T00:00:00+03:30' })
   @IsOptional()
   @IsDateTimeWithZone()
