@@ -15,7 +15,7 @@ cp .env.example .env      # then set the two MySQL passwords and DATABASE_URL
 npm run db:up             # start MySQL and wait until it is healthy
 npm run db:deploy         # apply the migrations
 npm run db:generate       # generate the Prisma client into src/generated/prisma
-npm run db:seed           # optional: a dev clinic with sample clients, services and appointments
+npm run db:seed           # create the dev clinic the frontend acts for (no sample data)
 npm run start:dev
 ```
 
@@ -46,7 +46,7 @@ npm run db:down       # stop it (data is kept in a Docker volume)
 npm run db:migrate    # create and apply a migration after editing prisma/schema/
 npm run db:deploy     # apply existing migrations (CI, production)
 npm run db:generate   # regenerate the Prisma client
-npm run db:seed       # reset the dev clinic (id 00000000-0000-7000-8000-000000000001) to the sample data
+npm run db:seed       # make sure the dev clinic (id 00000000-0000-7000-8000-000000000001) exists; touches no other data
 npm run db:studio     # browse the data
 ```
 
