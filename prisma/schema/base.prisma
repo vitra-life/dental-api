@@ -3,7 +3,7 @@
 
 generator client {
   provider            = "prisma-client"
-  output              = "../src/generated/prisma"
+  output              = "../../src/generated/prisma"
   moduleFormat        = "esm"
   importFileExtension = "js"
 }
@@ -18,6 +18,10 @@ model Clinic {
   name       String   @db.VarChar(255)
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+
+  clients      Client[]
+  services     Service[]
+  appointments Appointment[]
 
   @@map("clinics")
 }

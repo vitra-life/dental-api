@@ -4,7 +4,7 @@ import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module.js';
 import { configureApp, DOCS_PATH, setupSwagger } from './app.setup.js';
-import { Env } from './config/env.js';
+import { Env } from './core/config/env.js';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });

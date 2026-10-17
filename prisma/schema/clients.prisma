@@ -1,0 +1,36 @@
+enum Gender {
+  male
+  female
+}
+
+model Client {
+  id                String    @id @default(uuid(7)) @db.Char(36)
+  clinic_id         String    @db.Char(36)
+  first_name        String    @db.VarChar(100)
+  last_name         String    @db.VarChar(100)
+  phone             String    @db.VarChar(11)
+  national_id       String?   @db.Char(10)
+  birth_date        DateTime? @db.Date
+  gender            Gender
+  email             String?   @db.VarChar(255)
+  /// One of A+, A-, B+, B-, AB+, AB-, O+, O-. Validated by the API.
+  blood_type        String?   @db.VarChar(3)
+  address           String?   @db.Text
+  /// Free text, entries separated by a comma or "،".
+  allergies         String?   @db.Text
+  /// Free text, entries separated by a comma or "،".
+  medical_history   String?   @db.Text
+  emergency_contact String?   @db.VarChar(255)
+  emergency_phone   String?   @db.VarChar(11)
+  insurance_company String?   @db.VarChar(255)
+  insurance_number  String?   @db.VarChar(50)
+  notes             String?   @db.Text
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  clinic       Clinic        @relation(fields: [clinic_id], references: [id])
+  appointments Appointment[]
+
+  @@unique([clinic_id, phone])
+  @@map("clients")
+}
