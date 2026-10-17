@@ -7,20 +7,18 @@ enum AppointmentStatus {
 }
 
 model Appointment {
-  id          String            @id @default(uuid(7)) @db.Char(36)
-  clinic_id   String            @db.Char(36)
-  client_id   String            @db.Char(36)
-  service_id  String            @db.Char(36)
+  id               String            @id @default(uuid(7)) @db.Char(36)
+  clinic_id        String            @db.Char(36)
+  client_id        String            @db.Char(36)
+  service_id       String            @db.Char(36)
   /// Stored in UTC.
-  start_time  DateTime
-  /// Stored in UTC.
-  end_time    DateTime
-  status      AppointmentStatus @default(pending)
-  /// In Rial. Prefilled from the service's default price.
-  price       Int               @default(0) @db.UnsignedInt
-  description String?           @db.Text
-  created_at  DateTime          @default(now())
-  updated_at  DateTime          @updatedAt
+  start_time       DateTime
+  /// One of 20, 30, 45, 60, 90 or 120 (see appointment-duration.ts).
+  duration_minutes Int               @db.UnsignedSmallInt
+  status           AppointmentStatus @default(pending)
+  description      String?           @db.Text
+  created_at       DateTime          @default(now())
+  updated_at       DateTime          @updatedAt
 
   clinic  Clinic  @relation(fields: [clinic_id], references: [id])
   client  Client  @relation(fields: [client_id], references: [id], onDelete: Restrict)

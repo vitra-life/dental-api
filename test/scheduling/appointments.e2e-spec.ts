@@ -19,6 +19,7 @@ describe('Appointments (e2e)', () => {
   let serviceId: string;
   let longServiceId: string;
   let inactiveServiceId: string;
+  let oddServiceId: string;
   let otherClinicClientId: string;
 
   /** Books an appointment for the main client and returns its body. */
@@ -73,6 +74,8 @@ describe('Appointments (e2e)', () => {
       })
     ).id;
     inactiveServiceId = (await service('قدیمی', { active: false })).id;
+    // 40 minutes is not one of the bookable durations.
+    oddServiceId = (await service('مشاوره', { duration_minutes: 40 })).id;
   });
 
   afterAll(async () => {
@@ -82,33 +85,34 @@ describe('Appointments (e2e)', () => {
   });
 
   describe('booking', () => {
-    it('defaults end time, price and status from the service', async () => {
+    it('defaults the duration from the service and the status to pending', async () => {
       const body = await book();
       expect(body).toMatchObject({
         start_time: '2026-11-02T05:30:00.000Z',
-        end_time: '2026-11-02T06:15:00.000Z',
-        price: 8_000_000,
+        duration_minutes: 45,
         status: 'pending',
         description: null,
         client: { id: clientId, first_name: 'سمیرا', phone: '09121110010' },
         service: { id: serviceId, name: 'جرمگیری' },
       });
+      expect(body).not.toHaveProperty('end_time');
+      expect(body).not.toHaveProperty('price');
     });
 
-    it('keeps an explicit end time and price', async () => {
-      const body = await book({
-        end_time: '2026-11-02T10:00:00+03:30',
-        price: 5_000_000,
-        description: 'کنترل',
-      });
+    it('falls back to 30 minutes when the service length is not bookable', async () => {
+      const body = await book({ service_id: oddServiceId });
+      expect(body.duration_minutes).toBe(30);
+    });
+
+    it('keeps an explicit duration and description', async () => {
+      const body = await book({ duration_minutes: 20, description: 'کنترل' });
       expect(body).toMatchObject({
-        end_time: '2026-11-02T06:30:00.000Z',
-        price: 5_000_000,
+        duration_minutes: 20,
         description: 'کنترل',
       });
     });
 
-    it('refuses a time without a zone and an end before the start', async () => {
+    it('refuses a time without a zone and a duration outside the list', async () => {
       await api
         .post('/api/v1/appointments')
         .send({
@@ -123,12 +127,24 @@ describe('Appointments (e2e)', () => {
           client_id: clientId,
           service_id: serviceId,
           start_time: '2026-11-02T09:00:00Z',
-          end_time: '2026-11-02T08:00:00Z',
+          duration_minutes: 25,
         })
         .expect(400);
       expect(response.body.details).toEqual([
-        { field: 'end_time', errors: ['end_time must be after start_time'] },
+        {
+          field: 'duration_minutes',
+          errors: ['duration_minutes must be one of 20, 30, 45, 60, 90, 120'],
+        },
       ]);
+      await api
+        .post('/api/v1/appointments')
+        .send({
+          client_id: clientId,
+          service_id: serviceId,
+          start_time: '2026-11-02T09:00:00Z',
+          price: 1,
+        })
+        .expect(400);
     });
 
     it("refuses another clinic's client and an inactive service", async () => {
@@ -155,37 +171,41 @@ describe('Appointments (e2e)', () => {
   });
 
   describe('edit mode', () => {
-    it('moves the end time with the start when only the start changes', async () => {
-      const booked = await book({ end_time: '2026-11-02T10:00:00+03:30' });
+    it('keeps the duration when only the start changes', async () => {
+      const booked = await book({ duration_minutes: 60 });
       const response = await api
         .patch(`/api/v1/appointments/${booked.id}`)
         .send({ start_time: '2026-11-03T14:00:00+03:30' })
         .expect(200);
       expect(response.body).toMatchObject({
         start_time: '2026-11-03T10:30:00.000Z',
-        end_time: '2026-11-03T11:30:00.000Z',
+        duration_minutes: 60,
       });
     });
 
-    it('changes client, service, price and description', async () => {
+    it('changes client, service, duration and description', async () => {
       const booked = await book();
       const response = await api
         .patch(`/api/v1/appointments/${booked.id}`)
         .send({
           client_id: secondClientId,
           service_id: longServiceId,
-          price: 45_000_000,
           description: 'جلسه اول',
         })
         .expect(200);
       expect(response.body).toMatchObject({
         client_id: secondClientId,
         service: { id: longServiceId, name: 'عصب‌کشی' },
-        price: 45_000_000,
         description: 'جلسه اول',
-        // The service change alone does not move the end time.
-        end_time: booked.end_time,
+        // The service change alone does not change the duration.
+        duration_minutes: booked.duration_minutes,
       });
+
+      const longer = await api
+        .patch(`/api/v1/appointments/${booked.id}`)
+        .send({ duration_minutes: 90 })
+        .expect(200);
+      expect(longer.body.duration_minutes).toBe(90);
 
       const cleared = await api
         .patch(`/api/v1/appointments/${booked.id}`)
@@ -194,7 +214,7 @@ describe('Appointments (e2e)', () => {
       expect(cleared.body.description).toBeNull();
     });
 
-    it('refuses null on required fields, a bad end and a status field', async () => {
+    it('refuses null on required fields, a bad duration and a status field', async () => {
       const booked = await book();
       await api
         .patch(`/api/v1/appointments/${booked.id}`)
@@ -202,7 +222,7 @@ describe('Appointments (e2e)', () => {
         .expect(400);
       await api
         .patch(`/api/v1/appointments/${booked.id}`)
-        .send({ end_time: '2026-11-01T00:00:00Z' })
+        .send({ duration_minutes: 200 })
         .expect(400);
       await api
         .patch(`/api/v1/appointments/${booked.id}`)
@@ -218,7 +238,7 @@ describe('Appointments (e2e)', () => {
         .expect(200);
       const response = await api
         .patch(`/api/v1/appointments/${booked.id}`)
-        .send({ price: 1 })
+        .send({ description: 'x' })
         .expect(409);
       expect(response.body.message).toBe(
         'A completed appointment can no longer be edited',
@@ -289,7 +309,7 @@ describe('Appointments (e2e)', () => {
     await other.get(`/api/v1/appointments/${booked.id}`).expect(404);
     await other
       .patch(`/api/v1/appointments/${booked.id}`)
-      .send({ price: 1 })
+      .send({ description: 'x' })
       .expect(404);
     await other
       .patch(`/api/v1/appointments/${booked.id}/status`)

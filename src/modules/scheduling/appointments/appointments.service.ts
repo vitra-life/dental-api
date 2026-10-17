@@ -7,6 +7,7 @@ import {
 import { Prisma } from '../../../generated/prisma/client.js';
 import type { AppointmentStatus } from '../../../generated/prisma/enums.js';
 import { PrismaService } from '../../../core/prisma/prisma.service.js';
+import { defaultDuration } from './appointment-duration.js';
 import { canChangeStatus, isEditable } from './appointment-status.js';
 import { CreateAppointmentDto } from './dto/create-appointment.dto.js';
 import { ListAppointmentsQueryDto } from './dto/list-appointments-query.dto.js';
@@ -29,12 +30,6 @@ function fieldError(field: string, error: string) {
     message: 'Validation failed',
     details: [{ field, errors: [error] }],
   });
-}
-
-function assertEndAfterStart(start: Date, end: Date) {
-  if (end <= start) {
-    throw fieldError('end_time', 'end_time must be after start_time');
-  }
 }
 
 @Injectable()
@@ -84,20 +79,14 @@ export class AppointmentsService {
     await this.assertClient(clinicId, dto.client_id);
     const service = await this.bookableService(clinicId, dto.service_id);
 
-    const start = new Date(dto.start_time);
-    const end = dto.end_time
-      ? new Date(dto.end_time)
-      : new Date(start.getTime() + service.duration_minutes * MINUTE);
-    assertEndAfterStart(start, end);
-
     return this.prisma.appointment.create({
       data: {
         clinic_id: clinicId,
         client_id: dto.client_id,
         service_id: service.id,
-        start_time: start,
-        end_time: end,
-        price: dto.price ?? service.default_price,
+        start_time: new Date(dto.start_time),
+        duration_minutes:
+          dto.duration_minutes ?? defaultDuration(service.duration_minutes),
         description: dto.description ?? null,
       },
       include,
@@ -118,29 +107,13 @@ export class AppointmentsService {
       await this.bookableService(clinicId, dto.service_id);
     }
 
-    const start = dto.start_time
-      ? new Date(dto.start_time)
-      : current.start_time;
-    let end = current.end_time;
-    if (dto.end_time) {
-      end = new Date(dto.end_time);
-    } else if (dto.start_time) {
-      // Rescheduled without an end: keep the same length.
-      end = new Date(
-        start.getTime() +
-          (current.end_time.getTime() - current.start_time.getTime()),
-      );
-    }
-    assertEndAfterStart(start, end);
-
     return this.prisma.appointment.update({
       where: { id, clinic_id: clinicId },
       data: {
         client_id: dto.client_id,
         service_id: dto.service_id,
-        start_time: start,
-        end_time: end,
-        price: dto.price,
+        start_time: dto.start_time ? new Date(dto.start_time) : undefined,
+        duration_minutes: dto.duration_minutes,
         description: dto.description,
       },
       include,
