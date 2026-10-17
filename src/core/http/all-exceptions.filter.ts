@@ -10,7 +10,7 @@ import {
 import { HttpAdapterHost } from '@nestjs/core';
 import type { Request } from 'express';
 import { Prisma } from '../../generated/prisma/client.js';
-import { ErrorResponseDto } from '../dto/error-response.dto.js';
+import { ErrorResponseDto } from './error-response.dto.js';
 
 interface ErrorParts {
   status: number;

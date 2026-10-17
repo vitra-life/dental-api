@@ -2,12 +2,15 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_PIPE } from '@nestjs/core';
 import { LoggerModule } from 'nestjs-pino';
-import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
-import { loggerConfig } from './common/logger/logger.config.js';
-import { createValidationPipe } from './common/pipes/validation.pipe.js';
-import { Env, validateEnv } from './config/env.js';
-import { HealthModule } from './health/health.module.js';
-import { PrismaModule } from './prisma/prisma.module.js';
+import { AppointmentsModule } from './modules/scheduling/appointments/appointments.module.js';
+import { ClientsModule } from './modules/clients/clients.module.js';
+import { AllExceptionsFilter } from './core/http/all-exceptions.filter.js';
+import { loggerConfig } from './core/logger/logger.config.js';
+import { createValidationPipe } from './core/http/validation.pipe.js';
+import { Env, validateEnv } from './core/config/env.js';
+import { HealthModule } from './core/health/health.module.js';
+import { PrismaModule } from './core/prisma/prisma.module.js';
+import { ServicesModule } from './modules/catalog/services/services.module.js';
 
 @Module({
   imports: [
@@ -22,6 +25,9 @@ import { PrismaModule } from './prisma/prisma.module.js';
     }),
     PrismaModule,
     HealthModule,
+    ServicesModule,
+    ClientsModule,
+    AppointmentsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

@@ -1,0 +1,29 @@
+enum ServiceCategory {
+  general
+  endodontics
+  surgery
+  prosthodontics
+  cosmetic
+  orthodontics
+}
+
+model Service {
+  id               String          @id @default(uuid(7)) @db.Char(36)
+  clinic_id        String          @db.Char(36)
+  name             String          @db.VarChar(255)
+  category         ServiceCategory @default(general)
+  /// In Rial.
+  default_price    Int             @default(0) @db.UnsignedInt
+  duration_minutes Int             @default(30) @db.UnsignedSmallInt
+  description      String?         @db.Text
+  /// Inactive services are hidden when booking but kept for past appointments.
+  active           Boolean         @default(true)
+  created_at       DateTime        @default(now())
+  updated_at       DateTime        @updatedAt
+
+  clinic       Clinic        @relation(fields: [clinic_id], references: [id])
+  appointments Appointment[]
+
+  @@unique([clinic_id, name])
+  @@map("services")
+}

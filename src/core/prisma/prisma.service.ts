@@ -2,7 +2,7 @@ import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import { Env } from '../config/env.js';
-import { PrismaClient } from '../generated/prisma/client.js';
+import { PrismaClient } from '../../generated/prisma/client.js';
 
 @Injectable()
 export class PrismaService
