@@ -12,7 +12,7 @@ import { CreateAppointmentDto } from './dto/create-appointment.dto.js';
 import { ListAppointmentsQueryDto } from './dto/list-appointments-query.dto.js';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto.js';
 
-const MAX_RANGE_DAYS = 93;
+const MAX_RANGE_DAYS = 366;
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 
