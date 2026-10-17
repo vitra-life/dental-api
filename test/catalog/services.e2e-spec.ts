@@ -193,7 +193,7 @@ describe('Services (e2e)', () => {
         client_id: client.id,
         service_id: service.id,
         start_time: new Date(),
-        end_time: new Date(Date.now() + 1_800_000),
+        duration_minutes: 30,
       },
     });
 

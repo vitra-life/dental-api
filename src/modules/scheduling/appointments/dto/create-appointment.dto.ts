@@ -1,17 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsInt,
-  IsOptional,
-  IsString,
-  Max,
-  MaxLength,
-  Min,
-} from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { IsDateTimeWithZone } from '../../../../common/validators/dates.js';
-import { MAX_RIAL } from '../../../../common/validators/money.js';
 import { IsOptionalNonNull } from '../../../../common/validators/optional.js';
 import { TrimToNull } from '../../../../common/validators/transforms.js';
 import { IsUuid } from '../../../../common/validators/uuid.js';
+import { APPOINTMENT_DURATIONS } from '../appointment-duration.js';
 
 export class CreateAppointmentDto {
   @IsUuid()
@@ -21,22 +14,18 @@ export class CreateAppointmentDto {
   @IsUuid()
   service_id: string;
 
-  @ApiProperty({ example: '2026-10-14T09:30:00+03:30' })
+  /** The chosen date at the chosen time. */
+  @ApiProperty({ example: '2026-10-14T10:00:00+03:30' })
   @IsDateTimeWithZone()
   start_time: string;
 
-  /** Defaults to `start_time` plus the service's `duration_minutes`. */
-  @ApiPropertyOptional({ example: '2026-10-14T10:00:00+03:30' })
+  /** Defaults to the service's `duration_minutes` if that is one of the allowed values, else 30. */
+  @ApiPropertyOptional({ enum: APPOINTMENT_DURATIONS, example: 30 })
   @IsOptionalNonNull()
-  @IsDateTimeWithZone()
-  end_time?: string;
-
-  /** In Rial. Defaults to the service's `default_price`. */
-  @IsOptionalNonNull()
-  @IsInt()
-  @Min(0)
-  @Max(MAX_RIAL)
-  price?: number;
+  @IsIn(APPOINTMENT_DURATIONS, {
+    message: `duration_minutes must be one of ${APPOINTMENT_DURATIONS.join(', ')}`,
+  })
+  duration_minutes?: number;
 
   @IsOptional()
   @TrimToNull()

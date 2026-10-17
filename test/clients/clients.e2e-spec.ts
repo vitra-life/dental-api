@@ -190,7 +190,7 @@ describe('Clients (e2e)', () => {
       client_id: client.body.id,
       service_id: service.id,
       start_time: new Date(iso),
-      end_time: new Date(new Date(iso).getTime() + 1_800_000),
+      duration_minutes: 30,
       status,
     });
     await prisma.appointment.createMany({
