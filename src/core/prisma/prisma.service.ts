@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import { Env } from '../config/env.js';
 import { PrismaClient } from '../../generated/prisma/client.js';
+import { mariadbConfig } from './database-url.js';
 
 @Injectable()
 export class PrismaService
@@ -12,7 +13,9 @@ export class PrismaService
   constructor(config: ConfigService<Env, true>) {
     // Prisma talks to MySQL through the MariaDB driver adapter.
     super({
-      adapter: new PrismaMariaDb(config.get('DATABASE_URL', { infer: true })),
+      adapter: new PrismaMariaDb(
+        mariadbConfig(config.get('DATABASE_URL', { infer: true })),
+      ),
     });
   }
 
