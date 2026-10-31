@@ -2,11 +2,12 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
   HttpCode,
   HttpStatus,
   Post,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import {
   ApiBearerAuth,
   ApiForbiddenResponse,
@@ -23,7 +24,7 @@ import {
 } from '../../../common/auth/decorators.js';
 import { ErrorResponseDto } from '../../../core/http/error-response.dto.js';
 import { AuthService } from './auth.service.js';
-import { AccessTokenDto, MeDto, TokensDto } from './dto/auth-response.dto.js';
+import { ClinicSwitchDto, MeDto, TokensDto } from './dto/auth-response.dto.js';
 import {
   ChangePasswordDto,
   LoginDto,
@@ -42,8 +43,9 @@ export class AuthController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: TokensDto })
-  login(@Body() dto: LoginDto, @Headers('user-agent') userAgent?: string) {
-    return this.auth.login(dto, userAgent);
+  login(@Body() dto: LoginDto, @Req() request: Request) {
+    // Read from the request rather than @Headers(), which Swagger would list as a required parameter.
+    return this.auth.login(dto, request.headers['user-agent']);
   }
 
   /** Exchanges a refresh token for new tokens. Each refresh token works once. */
@@ -59,7 +61,7 @@ export class AuthController {
   @Post('switch-clinic')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @ApiOkResponse({ type: AccessTokenDto })
+  @ApiOkResponse({ type: ClinicSwitchDto })
   @ApiForbiddenResponse({ type: ErrorResponseDto })
   switchClinic(@CurrentAuth() auth: AuthContext, @Body() dto: SwitchClinicDto) {
     return this.auth.switchClinic(auth, dto.clinic_id);

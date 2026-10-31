@@ -55,3 +55,7 @@ export class TokensDto extends AccessTokenDto {
   refresh_token: string;
   me: MeDto;
 }
+
+export class ClinicSwitchDto extends AccessTokenDto {
+  me: MeDto;
+}
