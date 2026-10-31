@@ -14,6 +14,13 @@ export class CreateAppointmentDto {
   @IsUuid()
   service_id: string;
 
+  /**
+   * The doctor's membership id (see `GET /doctors`). With scope `own` it must
+   * be the caller; with `assigned`, the caller or one of their doctors.
+   */
+  @IsUuid()
+  doctor_membership_id: string;
+
   /** The chosen date at the chosen time. */
   @ApiProperty({ example: '2026-10-14T10:00:00+03:30' })
   @IsDateTimeWithZone()

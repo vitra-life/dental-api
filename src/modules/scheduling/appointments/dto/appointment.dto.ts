@@ -13,11 +13,18 @@ export class AppointmentServiceDto {
   name: string;
 }
 
+export class AppointmentDoctorDto {
+  membership_id: string;
+  full_name: string;
+}
+
 export class AppointmentDto {
   id: string;
   clinic_id: string;
   client_id: string;
   service_id: string;
+  doctor_membership_id: string | null;
+  created_by_membership_id: string | null;
   start_time: Date;
   duration_minutes: number;
 
@@ -29,4 +36,6 @@ export class AppointmentDto {
   updated_at: Date;
   client: AppointmentClientDto;
   service: AppointmentServiceDto;
+  /** Null for older appointments booked before doctors were recorded. */
+  doctor: AppointmentDoctorDto | null;
 }

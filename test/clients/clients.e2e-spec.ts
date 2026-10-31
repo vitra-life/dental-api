@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { App } from 'supertest/types.js';
 import { PrismaService } from '../../src/core/prisma/prisma.service.js';
 import {
-  asClinic,
+  asUser,
   createClinic,
   createTestApp,
   deleteClinic,
@@ -20,13 +20,17 @@ describe('Clients (e2e)', () => {
   let app: INestApplication<App>;
   let clinicId: string;
   let otherClinicId: string;
-  let api: ReturnType<typeof asClinic>;
+  let api: ReturnType<typeof asUser>;
+  let otherApi: ReturnType<typeof asUser>;
 
   beforeAll(async () => {
     app = await createTestApp();
-    clinicId = await createClinic(app, 'clients e2e');
-    otherClinicId = await createClinic(app, 'clients e2e (other)');
-    api = asClinic(app, clinicId);
+    const clinic = await createClinic(app, 'clients e2e');
+    const other = await createClinic(app, 'clients e2e (other)');
+    clinicId = clinic.id;
+    otherClinicId = other.id;
+    api = clinic.admin.api;
+    otherApi = other.admin.api;
   });
 
   afterAll(async () => {
@@ -98,10 +102,7 @@ describe('Clients (e2e)', () => {
   it('allows a phone once per clinic', async () => {
     await api.post('/api/v1/clients').send(leila).expect(201);
     await api.post('/api/v1/clients').send(leila).expect(409);
-    await asClinic(app, otherClinicId)
-      .post('/api/v1/clients')
-      .send(leila)
-      .expect(201);
+    await otherApi.post('/api/v1/clients').send(leila).expect(201);
   });
 
   it('edits a client and clears optional fields with null', async () => {
@@ -215,7 +216,7 @@ describe('Clients (e2e)', () => {
       .post('/api/v1/clients')
       .send({ ...leila, phone: '09121110040' })
       .expect(201);
-    const other = asClinic(app, otherClinicId);
+    const other = otherApi;
     await other.get(`/api/v1/clients/${created.body.id}`).expect(404);
     await other
       .patch(`/api/v1/clients/${created.body.id}`)

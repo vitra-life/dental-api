@@ -1,5 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, type Client } from '../../generated/prisma/client.js';
+import type { Client, Prisma } from '../../generated/prisma/client.js';
+import { audit } from '../../common/audit/audit.js';
+import type {
+  AccessContext,
+  MembershipContext,
+} from '../../common/auth/auth-request.js';
+import { clientScopeWhere } from '../../common/auth/access-scope.js';
 import { Page, pageArgs } from '../../common/dto/page-query.dto.js';
 import {
   formatDateOnly,
@@ -12,106 +18,147 @@ import { CreateClientDto } from './dto/create-client.dto.js';
 import { ListClientsQueryDto } from './dto/list-clients-query.dto.js';
 import { UpdateClientDto } from './dto/update-client.dto.js';
 
-const withAppointmentCount = {
-  _count: { select: { appointments: true } },
-} satisfies Prisma.ClientInclude;
-
-type ClientWithCount = Client & { _count: { appointments: number } };
-
 @Injectable()
 export class ClientsService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /** The clients the caller's scope reaches, newest first. */
   async list(
-    clinicId: string,
+    member: MembershipContext,
+    access: AccessContext,
     query: ListClientsQueryDto,
   ): Promise<Page<ClientDto>> {
     const words = toLatinDigits(query.q ?? '')
       .split(/\s+/)
       .filter(Boolean);
     const where: Prisma.ClientWhereInput = {
-      clinic_id: clinicId,
-      AND: words.map((word) => ({
-        OR: [
-          { first_name: { contains: word } },
-          { last_name: { contains: word } },
-          { phone: { contains: word } },
-          { national_id: { contains: word } },
-        ],
-      })),
+      clinic_id: member.clinic_id,
+      AND: [
+        await clientScopeWhere(this.prisma, access.scope, member),
+        ...words.map((word) => ({
+          OR: [
+            { first_name: { contains: word } },
+            { last_name: { contains: word } },
+            { phone: { contains: word } },
+            { national_id: { contains: word } },
+          ],
+        })),
+      ],
     };
     const [clients, total] = await this.prisma.$transaction([
       this.prisma.client.findMany({
         where,
-        include: withAppointmentCount,
         orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
         ...pageArgs(query),
       }),
       this.prisma.client.count({ where }),
     ]);
     return {
-      items: await this.withLastVisits(clinicId, clients),
+      items: await this.withVisits(member.clinic_id, clients),
       total,
       page: query.page,
       page_size: query.page_size,
     };
   }
 
-  async get(clinicId: string, id: string): Promise<ClientDto> {
-    const client = await this.prisma.client.findFirst({
-      where: { id, clinic_id: clinicId },
-      include: withAppointmentCount,
-    });
-    if (!client) throw new NotFoundException('Client not found');
-    const [result] = await this.withLastVisits(clinicId, [client]);
+  /** A client, if the caller's scope reaches it; otherwise 404. */
+  async get(
+    member: MembershipContext,
+    access: AccessContext,
+    id: string,
+  ): Promise<ClientDto> {
+    const [result] = await this.withVisits(member.clinic_id, [
+      await this.visible(member, access, id),
+    ]);
     return result;
   }
 
-  async create(clinicId: string, dto: CreateClientDto): Promise<ClientDto> {
+  async create(
+    member: MembershipContext,
+    dto: CreateClientDto,
+  ): Promise<ClientDto> {
     const client = await this.prisma.client.create({
-      // The DTO is plain data; losing its prototype is intended.
-      // oxlint-disable-next-line typescript/no-misused-spread
-      data: { ...dto, ...birthDate(dto), clinic_id: clinicId },
+      data: {
+        // The DTO is plain data; losing its prototype is intended.
+        // oxlint-disable-next-line typescript/no-misused-spread
+        ...dto,
+        ...birthDate(dto),
+        clinic_id: member.clinic_id,
+        created_by_membership_id: member.id,
+      },
     });
     return toClientDto(client, 0, null);
   }
 
   async update(
-    clinicId: string,
+    member: MembershipContext,
+    access: AccessContext,
     id: string,
     dto: UpdateClientDto,
   ): Promise<ClientDto> {
+    await this.visible(member, access, id);
     await this.prisma.client.update({
-      where: { id, clinic_id: clinicId },
+      where: { id, clinic_id: member.clinic_id },
       // The DTO is plain data; losing its prototype is intended.
       // oxlint-disable-next-line typescript/no-misused-spread
       data: { ...dto, ...birthDate(dto) },
     });
-    return this.get(clinicId, id);
+    await audit(this.prisma, member, {
+      action: 'client.updated',
+      resource_type: 'client',
+      resource_id: id,
+      details: { fields: Object.keys(dto) },
+    });
+    return this.get(member, access, id);
   }
 
-  /** Adds each client's last completed visit, with one query for all of them. */
-  private async withLastVisits(
+  private async visible(
+    member: MembershipContext,
+    access: AccessContext,
+    id: string,
+  ): Promise<Client> {
+    const client = await this.prisma.client.findFirst({
+      where: {
+        id,
+        clinic_id: member.clinic_id,
+        ...(await clientScopeWhere(this.prisma, access.scope, member)),
+      },
+    });
+    if (!client) throw new NotFoundException('Client not found');
+    return client;
+  }
+
+  /** Adds each client's appointment count and last completed visit, with two queries for all of them. */
+  private async withVisits(
     clinicId: string,
-    clients: ClientWithCount[],
+    clients: Client[],
   ): Promise<ClientDto[]> {
     if (clients.length === 0) return [];
-    const visits = await this.prisma.appointment.groupBy({
-      by: ['client_id'],
-      where: {
-        clinic_id: clinicId,
-        client_id: { in: clients.map((c) => c.id) },
-        status: 'completed',
-      },
-      _max: { start_time: true },
-    });
+    const ids = clients.map((c) => c.id);
+    const [counts, visits] = await Promise.all([
+      this.prisma.appointment.groupBy({
+        by: ['client_id'],
+        where: { clinic_id: clinicId, client_id: { in: ids } },
+        _count: { _all: true },
+      }),
+      this.prisma.appointment.groupBy({
+        by: ['client_id'],
+        where: {
+          clinic_id: clinicId,
+          client_id: { in: ids },
+          status: 'completed',
+        },
+        _max: { start_time: true },
+      }),
+    ]);
+    const count = new Map(counts.map((c) => [c.client_id, c._count._all]));
     const lastVisit = new Map(
       visits.map((v) => [v.client_id, v._max.start_time]),
     );
-    return clients.map(({ _count, ...client }) =>
+    return clients.map((client) =>
       toClientDto(
         client,
-        _count.appointments,
+        count.get(client.id) ?? 0,
         lastVisit.get(client.id) ?? null,
       ),
     );

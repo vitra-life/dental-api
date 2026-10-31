@@ -11,6 +11,9 @@ import { Env, validateEnv } from './core/config/env.js';
 import { HealthModule } from './core/health/health.module.js';
 import { PrismaModule } from './core/prisma/prisma.module.js';
 import { ServicesModule } from './modules/catalog/services/services.module.js';
+import { AuthModule } from './modules/identity/auth/auth.module.js';
+import { AccessModule } from './modules/access/access.module.js';
+import { StaffModule } from './modules/staff/staff.module.js';
 
 @Module({
   imports: [
@@ -25,6 +28,9 @@ import { ServicesModule } from './modules/catalog/services/services.module.js';
     }),
     PrismaModule,
     HealthModule,
+    AuthModule,
+    AccessModule,
+    StaffModule,
     ServicesModule,
     ClientsModule,
     AppointmentsModule,

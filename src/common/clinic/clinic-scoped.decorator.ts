@@ -1,23 +1,33 @@
 import { applyDecorators, UseGuards } from '@nestjs/common';
 import {
-  ApiBadRequestResponse,
-  ApiHeader,
-  ApiNotFoundResponse,
+  ApiBearerAuth,
+  ApiConflictResponse,
+  ApiForbiddenResponse,
+  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { PermissionGuard } from '../auth/permission.guard.js';
 import { ErrorResponseDto } from '../../core/http/error-response.dto.js';
-import { CLINIC_HEADER } from './clinic-request.js';
 import { ClinicGuard } from './clinic.guard.js';
 
-/** For controllers whose data belongs to one clinic. */
+/**
+ * For controllers whose data belongs to one clinic: the caller must be an
+ * active member of the session's active clinic, and hold each route's
+ * `@RequirePermission(...)` item.
+ */
 export const ClinicScoped = () =>
   applyDecorators(
-    UseGuards(ClinicGuard),
-    ApiHeader({
-      name: CLINIC_HEADER,
-      required: true,
-      description:
-        'Id of the clinic to act for. Temporary: it will come from the login token.',
+    UseGuards(ClinicGuard, PermissionGuard),
+    ApiBearerAuth(),
+    ApiUnauthorizedResponse({
+      type: ErrorResponseDto,
+      description: 'Not signed in, or the session ended',
     }),
-    ApiBadRequestResponse({ type: ErrorResponseDto }),
-    ApiNotFoundResponse({ type: ErrorResponseDto }),
+    ApiForbiddenResponse({
+      type: ErrorResponseDto,
+      description: 'Not a member, or missing the permission',
+    }),
+    ApiConflictResponse({
+      type: ErrorResponseDto,
+      description: 'No active clinic chosen yet',
+    }),
   );

@@ -1,0 +1,82 @@
+enum PermissionKind {
+  page
+  feature
+  action
+}
+
+enum PermissionScope {
+  /// Only the member's own records.
+  own
+  /// The member's own and those of the doctors they are assigned to.
+  assigned
+  /// Everything in the clinic.
+  clinic
+}
+
+/// A role: a system role (`clinic_id` null) usable in every clinic, or a
+/// clinic's own custom role.
+model Role {
+  id         String   @id @default(uuid(7)) @db.Char(36)
+  clinic_id  String?  @db.Char(36)
+  /// The clinic id, or "system" for system roles: MySQL lets a unique index
+  /// repeat NULLs, so `clinic_id` alone could not keep codes unique.
+  owner_key  String   @db.VarChar(36)
+  code       String   @db.VarChar(64)
+  name       String   @db.VarChar(255)
+  is_system  Boolean  @default(false)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([owner_key, code])
+  @@index([clinic_id])
+  @@map("roles")
+}
+
+/// One item of the permission catalogue: a page, a feature on a page, or an
+/// action. Kept in sync with `permission-catalog.ts` by the seed.
+model Permission {
+  id            String         @id @default(uuid(7)) @db.Char(36)
+  /// Dotted path, e.g. `appointments.booking.create`.
+  code          String         @unique @db.VarChar(128)
+  kind          PermissionKind
+  parent_code   String?        @db.VarChar(128)
+  /// Persian label for the roles screen.
+  label         String         @db.VarChar(255)
+  description   String?        @db.Text
+  sort_order    Int            @default(0)
+  /// False once an item is removed from the catalogue; grants are kept but ignored.
+  is_assignable Boolean        @default(true)
+  created_at    DateTime       @default(now())
+  updated_at    DateTime       @updatedAt
+
+  @@index([parent_code])
+  @@map("permissions")
+}
+
+/// A permission granted to a role, with the scope it covers.
+model RolePermission {
+  id            String          @id @default(uuid(7)) @db.Char(36)
+  role_id       String          @db.Char(36)
+  permission_id String          @db.Char(36)
+  scope         PermissionScope @default(clinic)
+  created_at    DateTime        @default(now())
+  updated_at    DateTime        @updatedAt
+
+  @@unique([role_id, permission_id])
+  @@index([permission_id])
+  @@map("role_permissions")
+}
+
+/// A role given to a membership.
+model MembershipRole {
+  id            String   @id @default(uuid(7)) @db.Char(36)
+  clinic_id     String   @db.Char(36)
+  membership_id String   @db.Char(36)
+  role_id       String   @db.Char(36)
+  created_at    DateTime @default(now())
+
+  @@unique([membership_id, role_id])
+  @@index([clinic_id])
+  @@index([role_id])
+  @@map("membership_roles")
+}

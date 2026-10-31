@@ -3,7 +3,8 @@ import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { PrismaService } from '../../src/core/prisma/prisma.service.js';
 import {
-  asClinic,
+  addMember,
+  asUser,
   createClinic,
   createTestApp,
   deleteClinic,
@@ -14,13 +15,19 @@ describe('Services (e2e)', () => {
   let app: INestApplication<App>;
   let clinicId: string;
   let otherClinicId: string;
-  let api: ReturnType<typeof asClinic>;
+  let api: ReturnType<typeof asUser>;
+  let otherApi: ReturnType<typeof asUser>;
+  let adminMembershipId: string;
 
   beforeAll(async () => {
     app = await createTestApp();
-    clinicId = await createClinic(app, 'services e2e');
-    otherClinicId = await createClinic(app, 'services e2e (other)');
-    api = asClinic(app, clinicId);
+    const clinic = await createClinic(app, 'services e2e');
+    const other = await createClinic(app, 'services e2e (other)');
+    clinicId = clinic.id;
+    otherClinicId = other.id;
+    api = clinic.admin.api;
+    otherApi = other.admin.api;
+    adminMembershipId = clinic.admin.membershipId;
   });
 
   afterAll(async () => {
@@ -29,27 +36,26 @@ describe('Services (e2e)', () => {
     await app.close();
   });
 
-  describe('the clinic header', () => {
-    it('is required', async () => {
+  describe('access', () => {
+    it('needs a signed-in user', async () => {
       const response = await request(app.getHttpServer())
         .get('/api/v1/services')
-        .expect(400);
-      expect(response.body.message).toBe('The x-clinic-id header is required');
+        .expect(401);
+      expect(response.body.message).toBe('Sign in first');
     });
 
-    it('must be a UUID', async () => {
-      await request(app.getHttpServer())
-        .get('/api/v1/services')
-        .set('x-clinic-id', 'nope')
-        .expect(400);
-    });
-
-    it('must name an existing clinic', async () => {
-      const response = await request(app.getHttpServer())
-        .get('/api/v1/services')
-        .set('x-clinic-id', '00000000-0000-7000-8000-000000000000')
-        .expect(404);
-      expect(response.body.message).toBe('Clinic not found');
+    it('lets any member read the catalogue, but only managers change it', async () => {
+      const assistant = await addMember(app, clinicId, {
+        roles: ['assistant'],
+      });
+      await assistant.api.get('/api/v1/services').expect(200);
+      const response = await assistant.api
+        .post('/api/v1/services')
+        .send({ name: 'ممنوع' })
+        .expect(403);
+      expect(response.body.details).toEqual({
+        permission: 'settings.services.manage',
+      });
     });
   });
 
@@ -83,7 +89,7 @@ describe('Services (e2e)', () => {
   it('rejects a duplicate name in the same clinic only', async () => {
     await api.post('/api/v1/services').send({ name: 'جرم‌گیری' }).expect(201);
     await api.post('/api/v1/services').send({ name: 'جرم‌گیری' }).expect(409);
-    await asClinic(app, otherClinicId)
+    await otherApi
       .post('/api/v1/services')
       .send({ name: 'جرم‌گیری' })
       .expect(201);
@@ -155,7 +161,7 @@ describe('Services (e2e)', () => {
       .post('/api/v1/services')
       .send({ name: 'ارتودنسی' })
       .expect(201);
-    const other = asClinic(app, otherClinicId);
+    const other = otherApi;
     await other.get(`/api/v1/services/${created.body.id}`).expect(404);
     await other
       .patch(`/api/v1/services/${created.body.id}`)
@@ -194,6 +200,7 @@ describe('Services (e2e)', () => {
         service_id: service.id,
         start_time: new Date(),
         duration_minutes: 30,
+        doctor_membership_id: adminMembershipId,
       },
     });
 
