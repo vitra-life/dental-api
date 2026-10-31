@@ -20,6 +20,9 @@ export function mariadbConfig(databaseUrl: string): PoolConfig {
     user: decodeURIComponent(url.username),
     password: decodeURIComponent(url.password),
     database: decodeURIComponent(url.pathname.replace(/^\//, '')),
+    // The driver's default of 1 s also covers the DNS lookup, which is too
+    // short for a hosted database on a slow network or a cold serverless start.
+    connectTimeout: 10_000,
     ...(sslaccept === null
       ? {}
       : { ssl: { rejectUnauthorized: sslaccept !== 'accept_invalid_certs' } }),

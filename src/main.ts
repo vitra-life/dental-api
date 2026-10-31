@@ -39,4 +39,9 @@ async function bootstrap() {
     logger.log(`API docs at /${DOCS_PATH}`, 'Bootstrap');
   }
 }
-await bootstrap();
+// Not awaited: Vercel imports this file and waits for listen(), so a
+// top-level await would keep that import from ever finishing.
+bootstrap().catch((error: unknown) => {
+  console.error(error);
+  process.exit(1);
+});
