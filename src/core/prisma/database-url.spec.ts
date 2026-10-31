@@ -10,6 +10,7 @@ describe('mariadbConfig', () => {
       user: 'dental',
       password: 'secret',
       database: 'dental',
+      connectTimeout: 10_000,
     });
   });
 
