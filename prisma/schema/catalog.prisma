@@ -21,9 +21,6 @@ model Service {
   created_at       DateTime        @default(now())
   updated_at       DateTime        @updatedAt
 
-  clinic       Clinic        @relation(fields: [clinic_id], references: [id])
-  appointments Appointment[]
-
   @@unique([clinic_id, name])
   @@map("services")
 }

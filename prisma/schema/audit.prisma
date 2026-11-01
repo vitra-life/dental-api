@@ -1,0 +1,18 @@
+/// A record of a sensitive change. Written by the backend; there is no API to
+/// change or delete entries.
+model AuditLog {
+  id                  String   @id @default(uuid(7)) @db.Char(36)
+  clinic_id           String   @db.Char(36)
+  actor_membership_id String   @db.Char(36)
+  /// e.g. role.created, permission.assigned, appointment.cancelled
+  action              String   @db.VarChar(64)
+  resource_type       String   @db.VarChar(64)
+  resource_id         String?  @db.Char(36)
+  /// Optional details, e.g. before/after values.
+  details             Json?
+  created_at          DateTime @default(now())
+
+  @@index([clinic_id, created_at])
+  @@index([clinic_id, action])
+  @@map("audit_logs")
+}

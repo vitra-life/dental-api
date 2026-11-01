@@ -11,11 +11,14 @@ Backend of the dental clinic management app (`../Dental-App`). NestJS 12, Prisma
 
 ```bash
 npm install
-cp .env.example .env      # then set the two MySQL passwords and DATABASE_URL
+cp .env.example .env      # then set the two MySQL passwords, DATABASE_URL and JWT_SECRET
 npm run db:up             # start MySQL and wait until it is healthy
 npm run db:deploy         # apply the migrations
 npm run db:generate       # generate the Prisma client into src/generated/prisma
-npm run db:seed           # create the dev clinic the frontend acts for (no sample data)
+npm run db:seed           # reference data (roles, permissions...) and the dev clinic; no sample data
+npm run clinic:create -- --clinic-id 00000000-0000-7000-8000-000000000001 \
+  --admin-mobile 09121234567 --admin-name "Your name" --staff-type doctor
+                          # your first login: prints a temporary password
 npm run start:dev
 ```
 
@@ -46,7 +49,8 @@ npm run db:down       # stop it (data is kept in a Docker volume)
 npm run db:migrate    # create and apply a migration after editing prisma/schema/
 npm run db:deploy     # apply existing migrations (CI, production)
 npm run db:generate   # regenerate the Prisma client
-npm run db:seed       # make sure the dev clinic (id 00000000-0000-7000-8000-000000000001) exists; touches no other data
+npm run db:seed       # sync reference data (safe in production); outside production also the dev clinic
+npm run clinic:create # a clinic (or an existing one with --clinic-id) and its first admin
 npm run db:studio     # browse the data
 ```
 
@@ -61,7 +65,13 @@ prisma/
     clients.prisma
     catalog.prisma       services
     scheduling.prisma    appointments
+    identity.prisma      users, auth_sessions, clinic_memberships
+    access.prisma        roles, permissions, role_permissions, membership_roles
+    staff.prisma         staff types, doctor profiles, relationship types, staff assignments
+    audit.prisma         audit_logs
   migrations/            SQL migrations, committed
+  seed.ts                `npm run db:seed`
+scripts/clinic-create.ts `npm run clinic:create`
 prisma7.config.ts        Prisma CLI config; loads .env
 docker-compose.yml       local MySQL
 src/
@@ -75,13 +85,21 @@ src/
     http/                AllExceptionsFilter, ErrorResponseDto, request validation
     health/              /health
   common/                building blocks shared by two or more features
-    clinic/              ClinicGuard, @ClinicScoped(), @ClinicId(): which clinic a request acts for
+    auth/                AuthGuard (global), PermissionGuard, decorators, the permission catalogue,
+                         scopes (access-scope.ts), delegation rules, passwords and tokens
+    clinic/              ClinicGuard, @ClinicScoped(), @ClinicId(): the session's active clinic
+    audit/               audit(): writes audit_logs
+    staff/               doctor lookups shared by appointments and staff
     dto/                 pagination
     validators/          mobile, national id, dates, money, uuid, digit and trim transforms
   modules/               features, grouped by business area
     clients/             /api/v1/clients
     catalog/services/    /api/v1/services
-    scheduling/appointments/  /api/v1/appointments (edit, status changes)
+    scheduling/appointments/  /api/v1/appointments (edit, status changes, cancel)
+    identity/auth/       /api/v1/auth (login, refresh, switch-clinic, me, change-password, logout)
+    access/              /api/v1/roles, /permissions, /staff-types, /relationship-types, /audit-logs;
+                         reference-data.ts (system roles and their grants)
+    staff/               /api/v1/staff, /staff-assignments, /doctors
 test/                    end-to-end tests, mirroring src/modules
   support/               app, clinic and request helpers
 ```
@@ -100,7 +118,13 @@ test/                    end-to-end tests, mirroring src/modules
 - **ES modules:** relative imports end in `.js`.
 - **JSON is snake_case**, in requests and responses.
 - **Errors** all have the shape of `ErrorResponseDto`: `status_code`, `error`, `message`, optional `details`, `path`, `request_id`, `timestamp`. Throw Nest's HTTP exceptions; do not build error bodies by hand.
-- **Clinic scoping:** every clinic-owned route needs the `x-clinic-id` header (a clinic's id) until login exists; then the clinic will come from the token and only `ClinicGuard` changes. Every query filters by `clinic_id`, so another clinic's record is a 404.
+- **No foreign keys, triggers or views.** Every table stands alone, so it can be moved or exported by itself. Models have plain id columns and no `@relation`; services check that referenced rows exist in the same clinic, and join in code. Index every id column you look up by.
+- **Login:** `POST /api/v1/auth/login` with mobile and password returns a 15-minute access token (`Authorization: Bearer …`) and a refresh token that is replaced on every `POST /auth/refresh`. Five wrong passwords lock the account for 15 minutes. Every route needs a token unless marked `@Public()`.
+- **Clinic scoping:** the active clinic belongs to the session (chosen at login when the user has one clinic, or with `POST /auth/switch-clinic`); there is no clinic header. `@ClinicScoped()` checks on every request that the clinic is active and the user still an active member. Every query filters by `clinic_id`, so another clinic's record is a 404.
+- **Permissions:** `src/common/auth/permission-catalog.ts` lists every page, feature and action; `npm run db:seed` copies it into `permissions`. A route declares `@RequirePermission(P.someAction)`. An item works only if its page is granted too; with several roles the widest scope wins.
+- **Scopes:** data actions carry `own` (my records), `assigned` (also those of doctors I'm assigned to) or `clinic`. Use the helpers in `access-scope.ts` and `@CurrentAccess()` to filter; don't re-implement them.
+- **Roles:** system roles are defined in `modules/access/reference-data.ts` and can't be changed through the API. Custom roles belong to one clinic. Nobody can grant a permission they don't hold, at a wider scope than theirs, and the last active clinic admin can't be removed.
+- **Audit:** call `audit()` for sensitive changes (roles, permissions, memberships, assignments, client updates, cancellations).
 - **Dates:** date-times are ISO 8601 with a time zone and are returned in UTC. Date-only fields (`birth_date`) are `YYYY-MM-DD`.
 - **Money** is integer Rial.
 - **Updates** are `PATCH` with any subset of fields; `null` clears an optional field and is rejected for a required one.

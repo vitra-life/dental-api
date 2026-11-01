@@ -2,7 +2,8 @@ import { INestApplication } from '@nestjs/common';
 import { App } from 'supertest/types.js';
 import { PrismaService } from '../../src/core/prisma/prisma.service.js';
 import {
-  asClinic,
+  addMember,
+  asUser,
   createClinic,
   createTestApp,
   deleteClinic,
@@ -13,7 +14,9 @@ describe('Appointments (e2e)', () => {
   let app: INestApplication<App>;
   let clinicId: string;
   let otherClinicId: string;
-  let api: ReturnType<typeof asClinic>;
+  let api: ReturnType<typeof asUser>;
+  let otherApi: ReturnType<typeof asUser>;
+  let adminMembershipId: string;
   let clientId: string;
   let secondClientId: string;
   let serviceId: string;
@@ -22,14 +25,22 @@ describe('Appointments (e2e)', () => {
   let oddServiceId: string;
   let otherClinicClientId: string;
 
-  /** Books an appointment for the main client and returns its body. */
+  /** Each booking gets its own two-hour slot, so bookings for the same doctor never clash. */
+  let slot = 0;
+  const nextSlot = () =>
+    new Date(
+      Date.UTC(2026, 10, 10, 5, 30) + slot++ * 2 * 3_600_000,
+    ).toISOString();
+
+  /** Books an appointment for the main client with the admin as doctor and returns its body. */
   async function book(values: Record<string, unknown> = {}) {
     const response = await api
       .post('/api/v1/appointments')
       .send({
         client_id: clientId,
         service_id: serviceId,
-        start_time: '2026-11-02T09:00:00+03:30',
+        doctor_membership_id: adminMembershipId,
+        start_time: nextSlot(),
         ...values,
       })
       .expect(201);
@@ -38,9 +49,13 @@ describe('Appointments (e2e)', () => {
 
   beforeAll(async () => {
     app = await createTestApp();
-    clinicId = await createClinic(app, 'appointments e2e');
-    otherClinicId = await createClinic(app, 'appointments e2e (other)');
-    api = asClinic(app, clinicId);
+    const clinic = await createClinic(app, 'appointments e2e');
+    const other = await createClinic(app, 'appointments e2e (other)');
+    clinicId = clinic.id;
+    otherClinicId = other.id;
+    api = clinic.admin.api;
+    otherApi = other.admin.api;
+    adminMembershipId = clinic.admin.membershipId;
 
     const prisma = app.get(PrismaService);
     const client = (phone: string, clinic = clinicId) =>
@@ -86,9 +101,11 @@ describe('Appointments (e2e)', () => {
 
   describe('booking', () => {
     it('defaults the duration from the service and the status to pending', async () => {
-      const body = await book();
+      const body = await book({ start_time: '2026-11-02T09:00:00+03:30' });
       expect(body).toMatchObject({
         start_time: '2026-11-02T05:30:00.000Z',
+        doctor_membership_id: adminMembershipId,
+        doctor: { membership_id: adminMembershipId },
         duration_minutes: 45,
         status: 'pending',
         description: null,
@@ -116,6 +133,7 @@ describe('Appointments (e2e)', () => {
       await api
         .post('/api/v1/appointments')
         .send({
+          doctor_membership_id: adminMembershipId,
           client_id: clientId,
           service_id: serviceId,
           start_time: '2026-11-02T09:00:00',
@@ -124,6 +142,7 @@ describe('Appointments (e2e)', () => {
       const response = await api
         .post('/api/v1/appointments')
         .send({
+          doctor_membership_id: adminMembershipId,
           client_id: clientId,
           service_id: serviceId,
           start_time: '2026-11-02T09:00:00Z',
@@ -139,6 +158,7 @@ describe('Appointments (e2e)', () => {
       await api
         .post('/api/v1/appointments')
         .send({
+          doctor_membership_id: adminMembershipId,
           client_id: clientId,
           service_id: serviceId,
           start_time: '2026-11-02T09:00:00Z',
@@ -151,6 +171,7 @@ describe('Appointments (e2e)', () => {
       const wrongClient = await api
         .post('/api/v1/appointments')
         .send({
+          doctor_membership_id: adminMembershipId,
           client_id: otherClinicClientId,
           service_id: serviceId,
           start_time: '2026-11-02T09:00:00Z',
@@ -161,12 +182,91 @@ describe('Appointments (e2e)', () => {
       const inactive = await api
         .post('/api/v1/appointments')
         .send({
+          doctor_membership_id: adminMembershipId,
           client_id: clientId,
           service_id: inactiveServiceId,
           start_time: '2026-11-02T09:00:00Z',
         })
         .expect(400);
       expect(inactive.body.details[0].field).toBe('service_id');
+    });
+  });
+
+  describe('doctors and double booking', () => {
+    it('needs an active doctor of the clinic', async () => {
+      const missing = await api
+        .post('/api/v1/appointments')
+        .send({
+          client_id: clientId,
+          service_id: serviceId,
+          start_time: nextSlot(),
+        })
+        .expect(400);
+      expect(
+        missing.body.details.map((d: { field: string }) => d.field),
+      ).toContain('doctor_membership_id');
+
+      const secretary = await addMember(app, clinicId, {
+        roles: ['secretary'],
+        staffTypes: ['secretary'],
+      });
+      const notADoctor = await api
+        .post('/api/v1/appointments')
+        .send({
+          client_id: clientId,
+          service_id: serviceId,
+          doctor_membership_id: secretary.membershipId,
+          start_time: nextSlot(),
+        })
+        .expect(400);
+      expect(notADoctor.body.details[0].field).toBe('doctor_membership_id');
+    });
+
+    it('refuses a second appointment for the doctor at an overlapping time', async () => {
+      const first = await book({
+        start_time: '2026-12-01T10:00:00+03:30',
+        duration_minutes: 60,
+      });
+      const clash = await api
+        .post('/api/v1/appointments')
+        .send({
+          client_id: secondClientId,
+          service_id: serviceId,
+          doctor_membership_id: adminMembershipId,
+          start_time: '2026-12-01T10:30:00+03:30',
+          duration_minutes: 30,
+        })
+        .expect(409);
+      expect(clash.body.details).toEqual({
+        reason: 'overlap',
+        appointment_id: first.id,
+      });
+
+      // Back to back is fine, and so is the same time once the first is cancelled.
+      await book({
+        start_time: '2026-12-01T11:00:00+03:30',
+        duration_minutes: 30,
+      });
+      await api.post(`/api/v1/appointments/${first.id}/cancel`).expect(200);
+      await book({
+        start_time: '2026-12-01T10:30:00+03:30',
+        duration_minutes: 30,
+      });
+    });
+
+    it('checks for clashes when rescheduling too', async () => {
+      await book({
+        start_time: '2026-12-02T10:00:00+03:30',
+        duration_minutes: 60,
+      });
+      const later = await book({
+        start_time: '2026-12-02T12:00:00+03:30',
+        duration_minutes: 30,
+      });
+      await api
+        .patch(`/api/v1/appointments/${later.id}`)
+        .send({ start_time: '2026-12-02T10:30:00+03:30' })
+        .expect(409);
     });
   });
 
@@ -257,12 +357,14 @@ describe('Appointments (e2e)', () => {
       expect((await status('confirmed').expect(200)).body.status).toBe(
         'confirmed',
       );
-      await status('pending').expect(409);
+      // pending is only the starting state; it cannot be set.
+      await status('pending').expect(400);
       expect((await status('completed').expect(200)).body.status).toBe(
         'completed',
       );
       await status('completed').expect(200);
-      await status('cancelled').expect(409);
+      await api.post(`/api/v1/appointments/${booked.id}/cancel`).expect(409);
+      await status('cancelled').expect(400);
       await status('later').expect(400);
     });
   });
@@ -281,7 +383,7 @@ describe('Appointments (e2e)', () => {
     });
 
     it('lists a range in start order, filtered by status and client', async () => {
-      const range = `from=${encodeURIComponent('2026-11-01T00:00:00+03:30')}&to=${encodeURIComponent('2026-11-05T00:00:00+03:30')}`;
+      const range = `from=${encodeURIComponent('2026-11-01T00:00:00+03:30')}&to=${encodeURIComponent('2026-11-30T00:00:00+03:30')}`;
       const all = await api.get(`/api/v1/appointments?${range}`).expect(200);
       const starts = all.body.map((a: { start_time: string }) => a.start_time);
       expect(starts.length).toBeGreaterThan(0);
@@ -305,15 +407,12 @@ describe('Appointments (e2e)', () => {
 
   it("hides another clinic's appointment", async () => {
     const booked = await book();
-    const other = asClinic(app, otherClinicId);
+    const other = otherApi;
     await other.get(`/api/v1/appointments/${booked.id}`).expect(404);
     await other
       .patch(`/api/v1/appointments/${booked.id}`)
       .send({ description: 'x' })
       .expect(404);
-    await other
-      .patch(`/api/v1/appointments/${booked.id}/status`)
-      .send({ status: 'cancelled' })
-      .expect(404);
+    await other.post(`/api/v1/appointments/${booked.id}/cancel`).expect(404);
   });
 });

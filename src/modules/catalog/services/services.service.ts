@@ -3,7 +3,6 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '../../../generated/prisma/client.js';
 import { PrismaService } from '../../../core/prisma/prisma.service.js';
 import { CreateServiceDto } from './dto/create-service.dto.js';
 import { ListServicesQueryDto } from './dto/list-services-query.dto.js';
@@ -47,19 +46,17 @@ export class ServicesService {
     });
   }
 
+  /** Deletes a service that no appointment uses; with appointments it must be deactivated instead. */
   async remove(clinicId: string, id: string) {
-    try {
-      await this.prisma.service.delete({ where: { id, clinic_id: clinicId } });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2003'
-      ) {
-        throw new ConflictException(
-          'The service has appointments and cannot be deleted; deactivate it instead',
-        );
-      }
-      throw error;
+    await this.get(clinicId, id);
+    const used = await this.prisma.appointment.count({
+      where: { clinic_id: clinicId, service_id: id },
+    });
+    if (used > 0) {
+      throw new ConflictException(
+        'The service has appointments and cannot be deleted; deactivate it instead',
+      );
     }
+    await this.prisma.service.delete({ where: { id, clinic_id: clinicId } });
   }
 }

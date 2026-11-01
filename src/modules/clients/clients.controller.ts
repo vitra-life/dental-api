@@ -13,7 +13,16 @@ import {
   ApiOkResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { ClinicId } from '../../common/clinic/clinic-id.decorator.js';
+import type {
+  AccessContext,
+  MembershipContext,
+} from '../../common/auth/auth-request.js';
+import {
+  CurrentAccess,
+  CurrentMembership,
+  RequirePermission,
+} from '../../common/auth/decorators.js';
+import { P } from '../../common/auth/permission-catalog.js';
 import { ClinicScoped } from '../../common/clinic/clinic-scoped.decorator.js';
 import { ErrorResponseDto } from '../../core/http/error-response.dto.js';
 import { ClientsService } from './clients.service.js';
@@ -33,34 +42,50 @@ const duplicatePhone = {
 export class ClientsController {
   constructor(private readonly clients: ClientsService) {}
 
-  /** Newest first, with optional search. */
+  /** Newest first, with optional search. Only the clients the caller's scope reaches. */
   @Get()
+  @RequirePermission(P.clientsListView)
   @ApiOkResponse({ type: ClientPageDto })
-  list(@ClinicId() clinicId: string, @Query() query: ListClientsQueryDto) {
-    return this.clients.list(clinicId, query);
+  list(
+    @CurrentMembership() member: MembershipContext,
+    @CurrentAccess() access: AccessContext,
+    @Query() query: ListClientsQueryDto,
+  ) {
+    return this.clients.list(member, access, query);
   }
 
   @Get(':id')
+  @RequirePermission(P.clientsRecordView)
   @ApiOkResponse({ type: ClientDto })
-  get(@ClinicId() clinicId: string, @Param('id') id: string) {
-    return this.clients.get(clinicId, id);
+  get(
+    @CurrentMembership() member: MembershipContext,
+    @CurrentAccess() access: AccessContext,
+    @Param('id') id: string,
+  ) {
+    return this.clients.get(member, access, id);
   }
 
   @Post()
+  @RequirePermission(P.clientsRecordCreate)
   @ApiCreatedResponse({ type: ClientDto })
   @ApiConflictResponse(duplicatePhone)
-  create(@ClinicId() clinicId: string, @Body() dto: CreateClientDto) {
-    return this.clients.create(clinicId, dto);
+  create(
+    @CurrentMembership() member: MembershipContext,
+    @Body() dto: CreateClientDto,
+  ) {
+    return this.clients.create(member, dto);
   }
 
   @Patch(':id')
+  @RequirePermission(P.clientsRecordUpdate)
   @ApiOkResponse({ type: ClientDto })
   @ApiConflictResponse(duplicatePhone)
   update(
-    @ClinicId() clinicId: string,
+    @CurrentMembership() member: MembershipContext,
+    @CurrentAccess() access: AccessContext,
     @Param('id') id: string,
     @Body() dto: UpdateClientDto,
   ) {
-    return this.clients.update(clinicId, id, dto);
+    return this.clients.update(member, access, id, dto);
   }
 }
