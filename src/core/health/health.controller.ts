@@ -1,5 +1,6 @@
 import { Controller, Get, VERSION_NEUTRAL } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Public } from '../../common/auth/decorators.js';
 import {
   HealthCheck,
   HealthCheckService,
@@ -9,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 
 /** Served at `/health`, outside the `/api/v1` prefix, for load balancers. */
 @ApiTags('health')
+@Public()
 @Controller({ path: 'health', version: VERSION_NEUTRAL })
 export class HealthController {
   constructor(

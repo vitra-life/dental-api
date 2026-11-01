@@ -1,43 +1,57 @@
 import {
-  BadRequestException,
   CanActivate,
+  ConflictException,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
-  NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '../../core/prisma/prisma.service.js';
-import { UUID_PATTERN } from '../validators/uuid.js';
-import { CLINIC_HEADER, ClinicRequest } from './clinic-request.js';
+import type { AuthRequest } from '../auth/auth-request.js';
 
 /**
- * Decides which clinic the request acts for and stores it on the request.
- * For now it comes from the `x-clinic-id` header; once login exists it will
- * come from the token, and only this guard changes.
+ * The clinic a request acts for is the session's active clinic (chosen at
+ * login or with `POST /auth/switch-clinic`); there is no clinic header. On
+ * every request the clinic must still be active and the caller still an
+ * active member, so removing a member takes effect at once.
  */
 @Injectable()
 export class ClinicGuard implements CanActivate {
   constructor(private readonly prisma: PrismaService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest<ClinicRequest>();
-    const header = request.headers[CLINIC_HEADER];
-    const clinicId = Array.isArray(header) ? header[0] : header;
+    const request = context.switchToHttp().getRequest<AuthRequest>();
+    const auth = request.auth;
+    if (!auth) throw new UnauthorizedException('Sign in first');
+    if (!auth.clinic_id) {
+      throw new ConflictException({
+        message: 'Choose a clinic first',
+        details: { reason: 'clinic_required' },
+      });
+    }
 
-    if (!clinicId) {
-      throw new BadRequestException(`The ${CLINIC_HEADER} header is required`);
-    }
-    if (!UUID_PATTERN.test(clinicId)) {
-      throw new BadRequestException(
-        `The ${CLINIC_HEADER} header must be a UUID`,
-      );
-    }
     const clinic = await this.prisma.clinic.findUnique({
-      where: { id: clinicId },
-      select: { id: true },
+      where: { id: auth.clinic_id },
+      select: { is_active: true },
     });
-    if (!clinic) throw new NotFoundException('Clinic not found');
+    if (!clinic?.is_active)
+      throw new ForbiddenException('The clinic is not active');
 
-    request.clinic_id = clinic.id;
+    const membership = await this.prisma.clinicMembership.findUnique({
+      where: {
+        clinic_id_user_id: { clinic_id: auth.clinic_id, user_id: auth.user_id },
+      },
+      select: { id: true, is_active: true },
+    });
+    if (!membership?.is_active)
+      throw new ForbiddenException('You are not a member of this clinic');
+
+    request.clinic_id = auth.clinic_id;
+    request.membership = {
+      id: membership.id,
+      clinic_id: auth.clinic_id,
+      user_id: auth.user_id,
+    };
     return true;
   }
 }

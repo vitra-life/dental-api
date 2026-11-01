@@ -24,6 +24,8 @@ const envSchema = z.object({
     ),
   SWAGGER_ENABLED: booleanFlag.default(false),
   DATABASE_URL: z.url({ protocol: /^mysql$/ }),
+  /** Signs access tokens. At least 32 characters; keep it secret. */
+  JWT_SECRET: z.string().min(32),
 });
 
 export type Env = z.infer<typeof envSchema>;

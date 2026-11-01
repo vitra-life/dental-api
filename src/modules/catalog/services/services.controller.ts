@@ -17,6 +17,8 @@ import {
   ApiOkResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { RequirePermission } from '../../../common/auth/decorators.js';
+import { P } from '../../../common/auth/permission-catalog.js';
 import { ClinicId } from '../../../common/clinic/clinic-id.decorator.js';
 import { ClinicScoped } from '../../../common/clinic/clinic-scoped.decorator.js';
 import { ErrorResponseDto } from '../../../core/http/error-response.dto.js';
@@ -32,7 +34,7 @@ import { ServicesService } from './services.service.js';
 export class ServicesController {
   constructor(private readonly services: ServicesService) {}
 
-  /** The clinic's whole service catalogue, ordered by name. */
+  /** The clinic's whole service catalogue, ordered by name. Any member may read it (booking needs it). */
   @Get()
   @ApiOkResponse({ type: [ServiceDto] })
   list(@ClinicId() clinicId: string, @Query() query: ListServicesQueryDto) {
@@ -46,6 +48,7 @@ export class ServicesController {
   }
 
   @Post()
+  @RequirePermission(P.servicesManage)
   @ApiCreatedResponse({ type: ServiceDto })
   @ApiConflictResponse({
     type: ErrorResponseDto,
@@ -56,6 +59,7 @@ export class ServicesController {
   }
 
   @Patch(':id')
+  @RequirePermission(P.servicesManage)
   @ApiOkResponse({ type: ServiceDto })
   @ApiConflictResponse({
     type: ErrorResponseDto,
@@ -70,6 +74,7 @@ export class ServicesController {
   }
 
   @Delete(':id')
+  @RequirePermission(P.servicesManage)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiNoContentResponse()
   @ApiConflictResponse({

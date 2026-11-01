@@ -1,0 +1,65 @@
+/// What someone is professionally (doctor, secretary, assistant). Says nothing
+/// about what they may do; that comes from roles.
+model StaffType {
+  id         String   @id @default(uuid(7)) @db.Char(36)
+  code       String   @unique @db.VarChar(64)
+  name       String   @db.VarChar(255)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("staff_types")
+}
+
+/// A staff type held by a membership.
+model MembershipStaffType {
+  id            String   @id @default(uuid(7)) @db.Char(36)
+  clinic_id     String   @db.Char(36)
+  membership_id String   @db.Char(36)
+  staff_type_id String   @db.Char(36)
+  created_at    DateTime @default(now())
+
+  @@unique([membership_id, staff_type_id])
+  @@index([clinic_id, staff_type_id])
+  @@map("membership_staff_types")
+}
+
+/// A doctor's professional details, per user (shared across clinics).
+model DoctorProfile {
+  id               String   @id @default(uuid(7)) @db.Char(36)
+  user_id          String   @unique @db.Char(36)
+  /// شماره نظام پزشکی
+  medical_license  String   @unique @db.VarChar(64)
+  specialty        String?  @db.VarChar(255)
+  license_verified Boolean  @default(false)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@map("doctor_profiles")
+}
+
+/// Kinds of working relationship (secretary of, assistant of, ...).
+model RelationshipType {
+  id         String   @id @default(uuid(7)) @db.Char(36)
+  code       String   @unique @db.VarChar(64)
+  name       String   @db.VarChar(255)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("relationship_types")
+}
+
+/// A staff member working for a doctor in one clinic. Feeds the `assigned` scope.
+model StaffAssignment {
+  id                   String   @id @default(uuid(7)) @db.Char(36)
+  clinic_id            String   @db.Char(36)
+  staff_membership_id  String   @db.Char(36)
+  doctor_membership_id String   @db.Char(36)
+  relationship_type_id String   @db.Char(36)
+  is_active            Boolean  @default(true)
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  @@unique([staff_membership_id, doctor_membership_id, relationship_type_id])
+  @@index([clinic_id, doctor_membership_id])
+  @@map("staff_assignments")
+}

@@ -1,5 +1,10 @@
 // Field names are snake_case on purpose: they are returned as-is by the API
 // and match the row types in the frontend (Dental-App/src/lib/types.ts).
+//
+// No foreign keys, triggers or views: every table stands alone so it can be
+// moved or exported by itself. Models have plain id columns and no
+// `@relation` fields; the backend checks that referenced rows exist (in the
+// same clinic) and joins in code. Every id column used for lookups has an index.
 
 generator client {
   provider            = "prisma-client"
@@ -12,16 +17,14 @@ datasource db {
   provider = "mysql"
 }
 
-/// A tenant. Every other table will carry a `clinic_id` pointing here.
+/// A tenant. Clinic-owned tables carry its id in `clinic_id`.
 model Clinic {
   id         String   @id @default(uuid(7)) @db.Char(36)
   name       String   @db.VarChar(255)
+  /// An inactive clinic cannot be used by its members.
+  is_active  Boolean  @default(true)
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
-
-  clients      Client[]
-  services     Service[]
-  appointments Appointment[]
 
   @@map("clinics")
 }

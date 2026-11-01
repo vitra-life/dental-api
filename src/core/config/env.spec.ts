@@ -1,22 +1,25 @@
 import { validateEnv } from './env.js';
 
 const DATABASE_URL = 'mysql://user:pass@localhost:3306/dental';
+const JWT_SECRET = 'a-test-secret-that-is-long-enough-123';
 
 describe('validateEnv', () => {
   it('fills defaults when only the required values are set', () => {
-    expect(validateEnv({ DATABASE_URL })).toEqual({
+    expect(validateEnv({ DATABASE_URL, JWT_SECRET })).toEqual({
       NODE_ENV: 'development',
       PORT: 3000,
       LOG_LEVEL: 'info',
       CORS_ORIGINS: [],
       SWAGGER_ENABLED: false,
       DATABASE_URL,
+      JWT_SECRET,
     });
   });
 
   it('parses strings from the environment into typed values', () => {
     const env = validateEnv({
       DATABASE_URL,
+      JWT_SECRET,
       PORT: '8080',
       SWAGGER_ENABLED: 'true',
       CORS_ORIGINS: 'http://localhost:5173, https://panel.example.com ,',
@@ -41,5 +44,12 @@ describe('validateEnv', () => {
 
   it('rejects a port that is not a number', () => {
     expect(() => validateEnv({ DATABASE_URL, PORT: 'abc' })).toThrow(/PORT/);
+  });
+
+  it('requires a long enough JWT_SECRET', () => {
+    expect(() => validateEnv({ DATABASE_URL })).toThrow(/JWT_SECRET/);
+    expect(() => validateEnv({ DATABASE_URL, JWT_SECRET: 'short' })).toThrow(
+      /JWT_SECRET/,
+    );
   });
 });
