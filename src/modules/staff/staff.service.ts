@@ -27,6 +27,7 @@ import type {
   CreatedStaffMemberDto,
   CreateStaffMemberDto,
   DoctorDto,
+  PasswordResetDto,
   SetDoctorProfileDto,
   StaffMemberDto,
   UpdateStaffMemberDto,
@@ -127,6 +128,62 @@ export class StaffService {
     return Object.assign(await this.get(actor.clinic_id, membership.id), {
       temporary_password: password,
     });
+  }
+
+  /**
+   * Gives a member a new temporary password and signs them out everywhere.
+   * Refused for yourself (use change password) and for people who also
+   * belong to another clinic, so one clinic's admin can't take over an
+   * account that other clinics rely on.
+   */
+  async resetPassword(
+    actor: MembershipContext,
+    membershipId: string,
+  ): Promise<PasswordResetDto> {
+    const membership = await this.membership(actor.clinic_id, membershipId);
+    if (membership.user_id === actor.user_id) {
+      throw new ConflictException({
+        message: 'Use change password for your own account',
+        details: { reason: 'self' },
+      });
+    }
+    const otherClinics = await this.prisma.clinicMembership.count({
+      where: {
+        user_id: membership.user_id,
+        clinic_id: { not: actor.clinic_id },
+        is_active: true,
+      },
+    });
+    if (otherClinics > 0) {
+      throw new ConflictException({
+        message: 'This person is also a member of another clinic',
+        details: { reason: 'other_clinics' },
+      });
+    }
+
+    const password = temporaryPassword();
+    const passwordHash = await hashPassword(password);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: membership.user_id },
+        data: {
+          password_hash: passwordHash,
+          must_change_password: true,
+          failed_login_attempts: 0,
+          locked_until: null,
+        },
+      });
+      await tx.authSession.updateMany({
+        where: { user_id: membership.user_id, revoked_at: null },
+        data: { revoked_at: new Date() },
+      });
+      await audit(tx, actor, {
+        action: 'staff.password_reset',
+        resource_type: 'membership',
+        resource_id: membershipId,
+      });
+    });
+    return { temporary_password: password };
   }
 
   /** Changes active state, staff types and roles. The clinic always keeps an active admin. */

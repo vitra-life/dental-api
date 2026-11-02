@@ -110,6 +110,11 @@ export class UpdateStaffMemberDto {
   role_ids?: string[];
 }
 
+export class PasswordResetDto {
+  /** Shown this once; the user must change it at first login. */
+  temporary_password: string;
+}
+
 export class SetDoctorProfileDto {
   /** شماره نظام پزشکی; unique across all doctors. */
   @Trim()

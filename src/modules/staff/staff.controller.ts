@@ -33,6 +33,7 @@ import {
   CreateStaffAssignmentDto,
   CreateStaffMemberDto,
   DoctorDto,
+  PasswordResetDto,
   SetDoctorProfileDto,
   StaffAssignmentDto,
   StaffMemberDto,
@@ -99,6 +100,27 @@ export class StaffController {
     @Body() dto: UpdateStaffMemberDto,
   ) {
     return this.staff.update(member, caller, membershipId, dto);
+  }
+
+  /**
+   * Gives the member a new temporary password, returned once, and signs them
+   * out everywhere. Not for your own account, nor for someone who also
+   * belongs to another clinic.
+   */
+  @Post(':membershipId/reset-password')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission(P.staffManage)
+  @ApiOkResponse({ type: PasswordResetDto })
+  @ApiConflictResponse({
+    type: ErrorResponseDto,
+    description:
+      'Your own account (reason self) or a member of another clinic (reason other_clinics)',
+  })
+  resetPassword(
+    @CurrentMembership() member: MembershipContext,
+    @Param('membershipId') membershipId: string,
+  ) {
+    return this.staff.resetPassword(member, membershipId);
   }
 
   @Put(':membershipId/doctor-profile')

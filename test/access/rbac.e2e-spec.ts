@@ -1,4 +1,5 @@
 import { INestApplication } from '@nestjs/common';
+import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { PrismaService } from '../../src/core/prisma/prisma.service.js';
 import { syncReferenceData } from '../../src/modules/access/reference-data.js';
@@ -9,6 +10,7 @@ import {
   deleteClinic,
   randomMobile,
   signIn,
+  TEST_PASSWORD,
   type TestClinic,
   type TestMember,
 } from '../support/app.js';
@@ -421,6 +423,54 @@ describe('Roles, permissions and scopes (e2e)', () => {
         .patch(`/api/v1/staff/${admin.membershipId}`)
         .send({ is_active: false })
         .expect(409);
+    });
+
+    it("resets a member's password and signs them out", async () => {
+      const member = await addMember(app, clinic.id, { roles: ['assistant'] });
+      const reset = await admin.api
+        .post(`/api/v1/staff/${member.membershipId}/reset-password`)
+        .expect(200);
+      const temporary = reset.body.temporary_password as string;
+      expect(temporary).toMatch(/^\S{8,}$/);
+
+      await member.api.get('/api/v1/auth/me').expect(401);
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ mobile: member.mobile, password: TEST_PASSWORD })
+        .expect(401);
+      const login = await signIn(app, member.mobile, temporary);
+      expect(login.body.me.user.must_change_password).toBe(true);
+
+      const log = await prisma.auditLog.findFirst({
+        where: {
+          action: 'staff.password_reset',
+          resource_id: member.membershipId,
+        },
+      });
+      expect(log?.actor_membership_id).toBe(admin.membershipId);
+    });
+
+    it('does not reset your own password, nor that of a member of another clinic', async () => {
+      const self = await admin.api
+        .post(`/api/v1/staff/${admin.membershipId}/reset-password`)
+        .expect(409);
+      expect(self.body.details).toEqual({ reason: 'self' });
+
+      const shared = await addMember(app, clinic.id, { roles: ['assistant'] });
+      await prisma.clinicMembership.create({
+        data: { clinic_id: other.id, user_id: shared.userId },
+      });
+      const elsewhere = await admin.api
+        .post(`/api/v1/staff/${shared.membershipId}/reset-password`)
+        .expect(409);
+      expect(elsewhere.body.details).toEqual({ reason: 'other_clinics' });
+
+      await secretary.api
+        .post(`/api/v1/staff/${shared.membershipId}/reset-password`)
+        .expect(403);
+      await other.admin.api
+        .post(`/api/v1/staff/${shared.membershipId}/reset-password`)
+        .expect(404);
     });
 
     it('lists doctors for booking and keeps doctor profiles', async () => {
