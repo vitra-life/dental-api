@@ -24,12 +24,16 @@ import {
 } from '../../../common/auth/decorators.js';
 import { ErrorResponseDto } from '../../../core/http/error-response.dto.js';
 import { AuthService } from './auth.service.js';
-import { ClinicSwitchDto, MeDto, TokensDto } from './dto/auth-response.dto.js';
+import {
+  MeDto,
+  TokensDto,
+  WorkspaceSwitchDto,
+} from './dto/auth-response.dto.js';
 import {
   ChangePasswordDto,
   LoginDto,
   RefreshDto,
-  SwitchClinicDto,
+  SwitchWorkspaceDto,
 } from './dto/auth.dto.js';
 
 @ApiTags('auth')
@@ -57,17 +61,23 @@ export class AuthController {
     return this.auth.refresh(dto.refresh_token);
   }
 
-  /** Chooses the clinic to work in; returns a new access token. */
-  @Post('switch-clinic')
+  /**
+   * Chooses the workspace (and so the clinic) to work in; returns a new
+   * access token. 403 if the workspace isn't the user's or isn't active.
+   */
+  @Post('switch-workspace')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @ApiOkResponse({ type: ClinicSwitchDto })
+  @ApiOkResponse({ type: WorkspaceSwitchDto })
   @ApiForbiddenResponse({ type: ErrorResponseDto })
-  switchClinic(@CurrentAuth() auth: AuthContext, @Body() dto: SwitchClinicDto) {
-    return this.auth.switchClinic(auth, dto.clinic_id);
+  switchWorkspace(
+    @CurrentAuth() auth: AuthContext,
+    @Body() dto: SwitchWorkspaceDto,
+  ) {
+    return this.auth.switchWorkspace(auth, dto.workspace_id);
   }
 
-  /** The signed-in user, their clinics, and their permissions in the active clinic. */
+  /** The signed-in user, their clinics and workspaces, and the active workspace's permissions. */
   @AllowTemporaryPassword()
   @Get('me')
   @ApiBearerAuth()

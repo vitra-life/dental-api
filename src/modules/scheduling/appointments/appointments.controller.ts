@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -12,16 +13,18 @@ import {
 import {
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiNoContentResponse,
   ApiOkResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import type {
-  AccessContext,
   MembershipContext,
+  WorkspaceContext,
 } from '../../../common/auth/auth-request.js';
 import {
-  CurrentAccess,
   CurrentMembership,
+  CurrentPermissions,
+  CurrentWorkspace,
   RequirePermission,
 } from '../../../common/auth/decorators.js';
 import { P } from '../../../common/auth/permission-catalog.js';
@@ -40,32 +43,30 @@ import { UpdateAppointmentDto } from './dto/update-appointment.dto.js';
 export class AppointmentsController {
   constructor(private readonly appointments: AppointmentsService) {}
 
-  /** Ordered by start time. Needs `from` and `to`, or `client_id`. Only what the caller's scope reaches. */
+  /** Ordered by start time. Needs `from` and `to`, or `client_id`. Only what the workspace sees: its doctor's, or all for a clinic-wide one. */
   @Get()
-  @RequirePermission(P.appointmentsListView)
+  @RequirePermission(P.appointmentView)
   @ApiOkResponse({ type: [AppointmentDto] })
   list(
-    @CurrentMembership() member: MembershipContext,
-    @CurrentAccess() access: AccessContext,
+    @CurrentWorkspace() workspace: WorkspaceContext,
     @Query() query: ListAppointmentsQueryDto,
   ) {
-    return this.appointments.list(member, access, query);
+    return this.appointments.list(workspace, query);
   }
 
   @Get(':id')
-  @RequirePermission(P.appointmentsListView)
+  @RequirePermission(P.appointmentView)
   @ApiOkResponse({ type: AppointmentDto })
   get(
-    @CurrentMembership() member: MembershipContext,
-    @CurrentAccess() access: AccessContext,
+    @CurrentWorkspace() workspace: WorkspaceContext,
     @Param('id') id: string,
   ) {
-    return this.appointments.get(member, access, id);
+    return this.appointments.get(workspace, id);
   }
 
-  /** Books a new appointment; it starts as `pending`. The doctor must be free and within the caller's scope. */
+  /** Books a new appointment; it starts as `pending`. The doctor must be free, and the workspace's own doctor unless it is clinic-wide. */
   @Post()
-  @RequirePermission(P.appointmentsBookingCreate)
+  @RequirePermission(P.appointmentCreate)
   @ApiCreatedResponse({ type: AppointmentDto })
   @ApiConflictResponse({
     type: ErrorResponseDto,
@@ -73,15 +74,15 @@ export class AppointmentsController {
   })
   create(
     @CurrentMembership() member: MembershipContext,
-    @CurrentAccess() access: AccessContext,
+    @CurrentWorkspace() workspace: WorkspaceContext,
     @Body() dto: CreateAppointmentDto,
   ) {
-    return this.appointments.create(member, access, dto);
+    return this.appointments.create(member, workspace, dto);
   }
 
   /** Edits or reschedules a pending or confirmed appointment. */
   @Patch(':id')
-  @RequirePermission(P.appointmentsBookingUpdate)
+  @RequirePermission(P.appointmentUpdate)
   @ApiOkResponse({ type: AppointmentDto })
   @ApiConflictResponse({
     type: ErrorResponseDto,
@@ -90,16 +91,24 @@ export class AppointmentsController {
   })
   update(
     @CurrentMembership() member: MembershipContext,
-    @CurrentAccess() access: AccessContext,
+    @CurrentWorkspace() workspace: WorkspaceContext,
     @Param('id') id: string,
     @Body() dto: UpdateAppointmentDto,
   ) {
-    return this.appointments.update(member, access, id, dto);
+    return this.appointments.update(member, workspace, id, dto);
   }
 
-  /** pending → confirmed, completed or no_show; confirmed → completed or no_show. The rest are final. */
+  /**
+   * pending → confirmed, completed or no_show; confirmed → completed or
+   * no_show. The rest are final. Each target needs its own permission:
+   * `appointment.confirm`, `appointment.complete` or `appointment.no_show`.
+   */
   @Patch(':id/status')
-  @RequirePermission(P.appointmentsStatusChange)
+  @RequirePermission(
+    P.appointmentConfirm,
+    P.appointmentComplete,
+    P.appointmentNoShow,
+  )
   @ApiOkResponse({ type: AppointmentDto })
   @ApiConflictResponse({
     type: ErrorResponseDto,
@@ -107,17 +116,24 @@ export class AppointmentsController {
   })
   changeStatus(
     @CurrentMembership() member: MembershipContext,
-    @CurrentAccess() access: AccessContext,
+    @CurrentWorkspace() workspace: WorkspaceContext,
+    @CurrentPermissions() permissions: ReadonlySet<string>,
     @Param('id') id: string,
     @Body() dto: UpdateAppointmentStatusDto,
   ) {
-    return this.appointments.changeStatus(member, access, id, dto.status);
+    return this.appointments.changeStatus(
+      member,
+      workspace,
+      permissions,
+      id,
+      dto.status,
+    );
   }
 
   /** Cancels a pending or confirmed appointment. Recorded in the audit log. */
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)
-  @RequirePermission(P.appointmentsStatusCancel)
+  @RequirePermission(P.appointmentCancel)
   @ApiOkResponse({ type: AppointmentDto })
   @ApiConflictResponse({
     type: ErrorResponseDto,
@@ -125,9 +141,22 @@ export class AppointmentsController {
   })
   cancel(
     @CurrentMembership() member: MembershipContext,
-    @CurrentAccess() access: AccessContext,
+    @CurrentWorkspace() workspace: WorkspaceContext,
     @Param('id') id: string,
   ) {
-    return this.appointments.cancel(member, access, id);
+    return this.appointments.cancel(member, workspace, id);
+  }
+
+  /** Hides the appointment (soft delete); it no longer blocks the doctor's time. Recorded in the audit log. */
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission(P.appointmentDelete)
+  @ApiNoContentResponse()
+  remove(
+    @CurrentMembership() member: MembershipContext,
+    @CurrentWorkspace() workspace: WorkspaceContext,
+    @Param('id') id: string,
+  ) {
+    return this.appointments.remove(member, workspace, id);
   }
 }

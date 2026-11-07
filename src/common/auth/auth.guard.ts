@@ -50,7 +50,7 @@ export class AuthGuard implements CanActivate {
       where: { id: claims.sid },
       select: {
         user_id: true,
-        active_clinic_id: true,
+        active_workspace_id: true,
         revoked_at: true,
         expires_at: true,
       },
@@ -83,12 +83,12 @@ export class AuthGuard implements CanActivate {
       });
     }
 
-    // The session, not the token, says which clinic is active: switching
-    // clinics updates the session.
+    // The session, not the token, says which workspace is active: switching
+    // workspaces updates the session.
     request.auth = {
       user_id: claims.sub,
       session_id: claims.sid,
-      clinic_id: session.active_clinic_id,
+      workspace_id: session.active_workspace_id,
     };
     return true;
   }

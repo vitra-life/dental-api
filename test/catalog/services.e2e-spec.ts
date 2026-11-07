@@ -44,18 +44,20 @@ describe('Services (e2e)', () => {
       expect(response.body.message).toBe('Sign in first');
     });
 
-    it('lets any member read the catalogue, but only managers change it', async () => {
-      const assistant = await addMember(app, clinicId, {
-        roles: ['assistant'],
+    it('needs its own item for each action', async () => {
+      const reception = await addMember(app, clinicId, {
+        workspace: { permissions: ['appointment.create'] },
       });
-      await assistant.api.get('/api/v1/services').expect(200);
-      const response = await assistant.api
+      // Booking needs the catalogue, so booking is enough to read it.
+      await reception.api.get('/api/v1/services').expect(200);
+      const response = await reception.api
         .post('/api/v1/services')
         .send({ name: 'ممنوع' })
         .expect(403);
-      expect(response.body.details).toEqual({
-        permission: 'settings.services.manage',
-      });
+      expect(response.body.details).toEqual({ permission: 'service.create' });
+
+      const empty = await addMember(app, clinicId);
+      await empty.api.get('/api/v1/services').expect(403);
     });
   });
 
