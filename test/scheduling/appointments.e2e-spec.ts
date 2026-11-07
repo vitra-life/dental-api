@@ -207,7 +207,6 @@ describe('Appointments (e2e)', () => {
       ).toContain('doctor_membership_id');
 
       const secretary = await addMember(app, clinicId, {
-        roles: ['secretary'],
         staffTypes: ['secretary'],
       });
       const notADoctor = await api

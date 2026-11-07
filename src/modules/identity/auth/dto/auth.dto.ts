@@ -21,9 +21,9 @@ export class RefreshDto {
   refresh_token: string;
 }
 
-export class SwitchClinicDto {
+export class SwitchWorkspaceDto {
   @IsUuid()
-  clinic_id: string;
+  workspace_id: string;
 }
 
 export class ChangePasswordDto {

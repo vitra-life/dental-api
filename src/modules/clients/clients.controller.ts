@@ -1,7 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -10,16 +13,17 @@ import {
 import {
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiNoContentResponse,
   ApiOkResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import type {
-  AccessContext,
   MembershipContext,
+  WorkspaceContext,
 } from '../../common/auth/auth-request.js';
 import {
-  CurrentAccess,
   CurrentMembership,
+  CurrentWorkspace,
   RequirePermission,
 } from '../../common/auth/decorators.js';
 import { P } from '../../common/auth/permission-catalog.js';
@@ -42,50 +46,65 @@ const duplicatePhone = {
 export class ClientsController {
   constructor(private readonly clients: ClientsService) {}
 
-  /** Newest first, with optional search. Only the clients the caller's scope reaches. */
+  /**
+   * Newest first, with optional search. Only the clients the workspace sees:
+   * a doctor's workspace sees that doctor's clients, a clinic-wide one all.
+   */
   @Get()
-  @RequirePermission(P.clientsListView)
+  @RequirePermission(P.clientView)
   @ApiOkResponse({ type: ClientPageDto })
   list(
-    @CurrentMembership() member: MembershipContext,
-    @CurrentAccess() access: AccessContext,
+    @CurrentWorkspace() workspace: WorkspaceContext,
     @Query() query: ListClientsQueryDto,
   ) {
-    return this.clients.list(member, access, query);
+    return this.clients.list(workspace, query);
   }
 
   @Get(':id')
-  @RequirePermission(P.clientsRecordView)
+  @RequirePermission(P.clientView)
   @ApiOkResponse({ type: ClientDto })
   get(
-    @CurrentMembership() member: MembershipContext,
-    @CurrentAccess() access: AccessContext,
+    @CurrentWorkspace() workspace: WorkspaceContext,
     @Param('id') id: string,
   ) {
-    return this.clients.get(member, access, id);
+    return this.clients.get(workspace, id);
   }
 
   @Post()
-  @RequirePermission(P.clientsRecordCreate)
+  @RequirePermission(P.clientCreate)
   @ApiCreatedResponse({ type: ClientDto })
   @ApiConflictResponse(duplicatePhone)
   create(
     @CurrentMembership() member: MembershipContext,
+    @CurrentWorkspace() workspace: WorkspaceContext,
     @Body() dto: CreateClientDto,
   ) {
-    return this.clients.create(member, dto);
+    return this.clients.create(member, workspace, dto);
   }
 
   @Patch(':id')
-  @RequirePermission(P.clientsRecordUpdate)
+  @RequirePermission(P.clientUpdate)
   @ApiOkResponse({ type: ClientDto })
   @ApiConflictResponse(duplicatePhone)
   update(
     @CurrentMembership() member: MembershipContext,
-    @CurrentAccess() access: AccessContext,
+    @CurrentWorkspace() workspace: WorkspaceContext,
     @Param('id') id: string,
     @Body() dto: UpdateClientDto,
   ) {
-    return this.clients.update(member, access, id, dto);
+    return this.clients.update(member, workspace, id, dto);
+  }
+
+  /** Hides the client and cancels their upcoming appointments (soft delete). */
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission(P.clientDelete)
+  @ApiNoContentResponse()
+  remove(
+    @CurrentMembership() member: MembershipContext,
+    @CurrentWorkspace() workspace: WorkspaceContext,
+    @Param('id') id: string,
+  ) {
+    return this.clients.remove(member, workspace, id);
   }
 }

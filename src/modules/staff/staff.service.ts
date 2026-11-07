@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -9,20 +8,17 @@ import type {
   ClinicMembership,
   Prisma,
 } from '../../generated/prisma/client.js';
-import type { PermissionScope } from '../../generated/prisma/enums.js';
 import { audit } from '../../common/audit/audit.js';
-import type { MembershipContext } from '../../common/auth/auth-request.js';
-import { grantsBeyond } from '../../common/auth/delegation.js';
+import type {
+  MembershipContext,
+  WorkspaceContext,
+} from '../../common/auth/auth-request.js';
 import { hashPassword, temporaryPassword } from '../../common/auth/password.js';
 import {
   DOCTOR_STAFF_TYPE,
   doctorMembershipIds,
 } from '../../common/staff/doctors.js';
 import { PrismaService } from '../../core/prisma/prisma.service.js';
-import {
-  CLINIC_ADMIN_ROLE,
-  SYSTEM_ROLE_OWNER,
-} from '../../common/auth/system-roles.js';
 import type {
   CreatedStaffMemberDto,
   CreateStaffMemberDto,
@@ -32,20 +28,20 @@ import type {
   StaffMemberDto,
   UpdateStaffMemberDto,
 } from './dto/staff.dto.js';
+import { fieldError, WorkspacesService } from './workspaces.service.js';
 
-/** A 400 in the same shape as a validation error, for one field. */
-function fieldError(field: string, error: string) {
-  return new BadRequestException({
-    message: 'Validation failed',
-    details: [{ field, errors: [error] }],
-  });
-}
-
+/**
+ * The people of a clinic: who they are (staff types, doctor profile) and
+ * their workspaces. What they may do lives on each workspace.
+ */
 @Injectable()
 export class StaffService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly workspaces: WorkspacesService,
+  ) {}
 
-  /** Every membership of the clinic (active and inactive), with user, staff types, roles and doctor profile. */
+  /** Every membership of the clinic (active and inactive), with staff types, workspaces and doctor profile. */
   async list(clinicId: string): Promise<StaffMemberDto[]> {
     const memberships = await this.prisma.clinicMembership.findMany({
       where: { clinic_id: clinicId },
@@ -63,15 +59,15 @@ export class StaffService {
 
   /**
    * Adds someone to the clinic. An existing user (same mobile) is reused;
-   * otherwise an account is created with a temporary password.
+   * otherwise an account is created with a temporary password. A doctor gets
+   * their practice workspace, and each position in `positions` becomes a
+   * workspace. All of them start with no permissions.
    */
   async create(
     actor: MembershipContext,
-    caller: Map<string, PermissionScope>,
     dto: CreateStaffMemberDto,
   ): Promise<CreatedStaffMemberDto> {
     const staffTypeIds = await this.staffTypeIds(dto.staff_types);
-    await this.assertRolesGrantable(actor.clinic_id, caller, dto.role_ids);
 
     let user = await this.prisma.user.findUnique({
       where: { mobile: dto.mobile },
@@ -106,13 +102,27 @@ export class StaffService {
       const created = await tx.clinicMembership.create({
         data: { clinic_id: actor.clinic_id, user_id: user.id },
       });
-      await this.replaceLinks(
+      await this.replaceStaffTypes(
         tx,
         actor.clinic_id,
         created.id,
         staffTypeIds,
-        dto.role_ids,
       );
+      if (dto.staff_types.includes(DOCTOR_STAFF_TYPE)) {
+        await this.workspaces.ensureDoctorWorkspace(
+          tx,
+          actor.clinic_id,
+          created.id,
+        );
+      }
+      for (const position of dto.positions ?? []) {
+        await this.workspaces.addPosition(
+          tx,
+          actor.clinic_id,
+          created.id,
+          position,
+        );
+      }
       await audit(tx, actor, {
         action: 'membership.created',
         resource_type: 'membership',
@@ -120,7 +130,11 @@ export class StaffService {
         details: {
           mobile: dto.mobile,
           staff_types: dto.staff_types,
-          role_ids: dto.role_ids,
+          positions: (dto.positions ?? []).map((p) => ({
+            kind: p.kind,
+            doctor_membership_id: p.doctor_membership_id ?? null,
+            relationship_type: p.relationship_type ?? null,
+          })),
         },
       });
       return created;
@@ -186,10 +200,13 @@ export class StaffService {
     return { temporary_password: password };
   }
 
-  /** Changes active state, staff types and roles. The clinic always keeps an active admin. */
+  /**
+   * Changes active state and staff types. Becoming a doctor adds the practice
+   * workspace; no longer being one deactivates it. The clinic always keeps an
+   * active admin.
+   */
   async update(
     actor: MembershipContext,
-    caller: Map<string, PermissionScope>,
     membershipId: string,
     dto: UpdateStaffMemberDto,
   ): Promise<StaffMemberDto> {
@@ -197,29 +214,10 @@ export class StaffService {
     const staffTypeIds = dto.staff_types
       ? await this.staffTypeIds(dto.staff_types)
       : undefined;
-    if (dto.role_ids)
-      await this.assertRolesGrantable(actor.clinic_id, caller, dto.role_ids);
-
-    const adminRole = await this.clinicAdminRole();
-    const isAdminNow = await this.prisma.membershipRole.count({
-      where: { membership_id: membershipId, role_id: adminRole.id },
-    });
-    const staysAdmin = dto.role_ids
-      ? dto.role_ids.includes(adminRole.id)
-      : isAdminNow > 0;
-    const staysActive = dto.is_active ?? current.is_active;
-    if (isAdminNow > 0 && current.is_active && (!staysAdmin || !staysActive)) {
-      const otherAdmins = await this.activeAdminCount(
-        actor.clinic_id,
-        adminRole.id,
+    if (current.is_active && dto.is_active === false) {
+      await this.workspaces.assertAdminRemains(actor.clinic_id, {
         membershipId,
-      );
-      if (otherAdmins === 0) {
-        throw new ConflictException({
-          message: 'The clinic needs at least one active clinic admin',
-          details: { reason: 'last_admin' },
-        });
-      }
+      });
     }
 
     await this.prisma.$transaction(async (tx) => {
@@ -229,13 +227,30 @@ export class StaffService {
           data: { is_active: dto.is_active },
         });
       }
-      await this.replaceLinks(
-        tx,
-        actor.clinic_id,
-        membershipId,
-        staffTypeIds,
-        dto.role_ids,
-      );
+      if (dto.staff_types && staffTypeIds) {
+        await this.replaceStaffTypes(
+          tx,
+          actor.clinic_id,
+          membershipId,
+          staffTypeIds,
+        );
+        const isDoctor = dto.staff_types.includes(DOCTOR_STAFF_TYPE);
+        if (isDoctor) {
+          await this.workspaces.ensureDoctorWorkspace(
+            tx,
+            actor.clinic_id,
+            membershipId,
+          );
+        }
+        await tx.workspace.updateMany({
+          where: {
+            clinic_id: actor.clinic_id,
+            membership_id: membershipId,
+            kind: 'doctor',
+          },
+          data: { is_active: isDoctor },
+        });
+      }
       await audit(tx, actor, {
         action: 'membership.updated',
         resource_type: 'membership',
@@ -283,11 +298,17 @@ export class StaffService {
     return this.get(actor.clinic_id, membershipId);
   }
 
-  /** Active doctors of the clinic, for booking. */
-  async doctors(clinicId: string): Promise<DoctorDto[]> {
-    const ids = await doctorMembershipIds(this.prisma, clinicId);
+  /**
+   * The doctors the workspace can book for: its own doctor, or every active
+   * doctor of the clinic for a clinic-wide workspace.
+   */
+  async doctors(workspace: WorkspaceContext): Promise<DoctorDto[]> {
+    const all = await doctorMembershipIds(this.prisma, workspace.clinic_id);
+    const ids = workspace.doctor_membership_id
+      ? all.filter((id) => id === workspace.doctor_membership_id)
+      : all;
     const members = await this.describe(
-      clinicId,
+      workspace.clinic_id,
       await this.prisma.clinicMembership.findMany({
         where: { id: { in: ids } },
       }),
@@ -325,118 +346,21 @@ export class StaffService {
     return types.map((t) => t.id);
   }
 
-  /**
-   * The roles must be system roles or this clinic's own (this replaces the
-   * design's trigger), and the caller may only hand out roles whose grants
-   * they hold themselves.
-   */
-  private async assertRolesGrantable(
-    clinicId: string,
-    caller: Map<string, PermissionScope>,
-    roleIds: string[],
-  ) {
-    if (roleIds.length === 0) return;
-    const roles = await this.prisma.role.findMany({
-      where: {
-        id: { in: roleIds },
-        OR: [{ is_system: true, clinic_id: null }, { clinic_id: clinicId }],
-      },
-      select: { id: true },
-    });
-    const missing = roleIds.filter((id) => !roles.some((r) => r.id === id));
-    if (missing.length > 0)
-      throw fieldError(
-        'role_ids',
-        'Each role must be a system role or one of this clinic',
-      );
-
-    const grants = await this.prisma.rolePermission.findMany({
-      where: { role_id: { in: roleIds } },
-    });
-    const permissions = await this.prisma.permission.findMany({
-      where: {
-        id: { in: [...new Set(grants.map((g) => g.permission_id))] },
-        is_assignable: true,
-      },
-      select: { id: true, code: true },
-    });
-    const code = new Map(permissions.map((p) => [p.id, p.code]));
-    const beyond = grantsBeyond(
-      caller,
-      grants.flatMap((g) =>
-        code.has(g.permission_id)
-          ? [{ code: code.get(g.permission_id)!, scope: g.scope }]
-          : [],
-      ),
-    );
-    if (beyond.length > 0) {
-      throw new ForbiddenException({
-        message: 'You can only give roles whose permissions you hold yourself',
-        details: { permissions: beyond },
-      });
-    }
-  }
-
-  private async replaceLinks(
+  private async replaceStaffTypes(
     tx: Prisma.TransactionClient,
     clinicId: string,
     membershipId: string,
-    staffTypeIds: string[] | undefined,
-    roleIds: string[] | undefined,
+    staffTypeIds: string[],
   ) {
-    if (staffTypeIds) {
-      await tx.membershipStaffType.deleteMany({
-        where: { membership_id: membershipId },
-      });
-      await tx.membershipStaffType.createMany({
-        data: staffTypeIds.map((staff_type_id) => ({
-          clinic_id: clinicId,
-          membership_id: membershipId,
-          staff_type_id,
-        })),
-      });
-    }
-    if (roleIds) {
-      await tx.membershipRole.deleteMany({
-        where: { membership_id: membershipId },
-      });
-      await tx.membershipRole.createMany({
-        data: roleIds.map((role_id) => ({
-          clinic_id: clinicId,
-          membership_id: membershipId,
-          role_id,
-        })),
-      });
-    }
-  }
-
-  private async clinicAdminRole() {
-    return this.prisma.role.findUniqueOrThrow({
-      where: {
-        owner_key_code: {
-          owner_key: SYSTEM_ROLE_OWNER,
-          code: CLINIC_ADMIN_ROLE,
-        },
-      },
+    await tx.membershipStaffType.deleteMany({
+      where: { membership_id: membershipId },
     });
-  }
-
-  /** Active memberships of the clinic, other than `exceptId`, that hold the admin role. */
-  private async activeAdminCount(
-    clinicId: string,
-    adminRoleId: string,
-    exceptId: string,
-  ): Promise<number> {
-    const links = await this.prisma.membershipRole.findMany({
-      where: {
+    await tx.membershipStaffType.createMany({
+      data: staffTypeIds.map((staff_type_id) => ({
         clinic_id: clinicId,
-        role_id: adminRoleId,
-        membership_id: { not: exceptId },
-      },
-      select: { membership_id: true },
-    });
-    return this.prisma.clinicMembership.count({
-      where: { id: { in: links.map((l) => l.membership_id) }, is_active: true },
+        membership_id: membershipId,
+        staff_type_id,
+      })),
     });
   }
 
@@ -447,7 +371,7 @@ export class StaffService {
     if (memberships.length === 0) return [];
     const ids = memberships.map((m) => m.id);
     const userIds = memberships.map((m) => m.user_id);
-    const [users, typeLinks, roleLinks, profiles] = await Promise.all([
+    const [users, typeLinks, profiles, workspaces] = await Promise.all([
       this.prisma.user.findMany({
         where: { id: { in: userIds } },
         select: { id: true, full_name: true, mobile: true },
@@ -455,32 +379,21 @@ export class StaffService {
       this.prisma.membershipStaffType.findMany({
         where: { membership_id: { in: ids } },
       }),
-      this.prisma.membershipRole.findMany({
-        where: { membership_id: { in: ids } },
-      }),
       this.prisma.doctorProfile.findMany({
         where: { user_id: { in: userIds } },
       }),
+      this.workspaces.ofMembers(clinicId, ids),
     ]);
-    const [types, roles] = await Promise.all([
-      this.prisma.staffType.findMany({
-        where: { id: { in: typeLinks.map((l) => l.staff_type_id) } },
-      }),
-      this.prisma.role.findMany({
-        where: { id: { in: roleLinks.map((l) => l.role_id) } },
-      }),
-    ]);
+    const types = await this.prisma.staffType.findMany({
+      where: { id: { in: typeLinks.map((l) => l.staff_type_id) } },
+    });
     const user = new Map(users.map((u) => [u.id, u]));
     const type = new Map(types.map((t) => [t.id, t.code]));
-    const role = new Map(roles.map((r) => [r.id, r]));
     const profile = new Map(profiles.map((p) => [p.user_id, p]));
-
     return memberships.map((m) => {
       const staffTypes = typeLinks
         .filter((l) => l.membership_id === m.id)
-        .flatMap((l) =>
-          type.has(l.staff_type_id) ? [type.get(l.staff_type_id)!] : [],
-        );
+        .flatMap((l) => type.get(l.staff_type_id) ?? []);
       const doctor = profile.get(m.user_id);
       return {
         membership_id: m.id,
@@ -490,18 +403,7 @@ export class StaffService {
         is_active: m.is_active,
         joined_at: m.joined_at,
         staff_types: staffTypes,
-        roles: roleLinks
-          .filter((l) => l.membership_id === m.id)
-          .map((l) => role.get(l.role_id))
-          .filter(
-            (r) => r !== undefined && (r.is_system || r.clinic_id === clinicId),
-          )
-          .map((r) => ({
-            id: r!.id,
-            code: r!.code,
-            name: r!.name,
-            is_system: r!.is_system,
-          })),
+        workspaces: workspaces.get(m.id) ?? [],
         doctor_profile:
           doctor && staffTypes.includes(DOCTOR_STAFF_TYPE)
             ? {

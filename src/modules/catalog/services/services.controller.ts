@@ -34,21 +34,23 @@ import { ServicesService } from './services.service.js';
 export class ServicesController {
   constructor(private readonly services: ServicesService) {}
 
-  /** The clinic's whole service catalogue, ordered by name. Any member may read it (booking needs it). */
+  /** The clinic's whole service catalogue, ordered by name. Booking needs it, so viewing or booking appointments is enough. */
   @Get()
+  @RequirePermission(P.serviceView, P.appointmentView, P.appointmentCreate)
   @ApiOkResponse({ type: [ServiceDto] })
   list(@ClinicId() clinicId: string, @Query() query: ListServicesQueryDto) {
     return this.services.list(clinicId, query);
   }
 
   @Get(':id')
+  @RequirePermission(P.serviceView, P.appointmentView, P.appointmentCreate)
   @ApiOkResponse({ type: ServiceDto })
   get(@ClinicId() clinicId: string, @Param('id') id: string) {
     return this.services.get(clinicId, id);
   }
 
   @Post()
-  @RequirePermission(P.servicesManage)
+  @RequirePermission(P.serviceCreate)
   @ApiCreatedResponse({ type: ServiceDto })
   @ApiConflictResponse({
     type: ErrorResponseDto,
@@ -59,7 +61,7 @@ export class ServicesController {
   }
 
   @Patch(':id')
-  @RequirePermission(P.servicesManage)
+  @RequirePermission(P.serviceUpdate)
   @ApiOkResponse({ type: ServiceDto })
   @ApiConflictResponse({
     type: ErrorResponseDto,
@@ -74,7 +76,7 @@ export class ServicesController {
   }
 
   @Delete(':id')
-  @RequirePermission(P.servicesManage)
+  @RequirePermission(P.serviceDelete)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiNoContentResponse()
   @ApiConflictResponse({

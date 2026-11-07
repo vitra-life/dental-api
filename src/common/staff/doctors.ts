@@ -2,9 +2,15 @@ import type { PrismaService } from '../../core/prisma/prisma.service.js';
 
 export const DOCTOR_STAFF_TYPE = 'doctor';
 
+/** Prisma or a transaction client: enough to look doctors up. */
+type DoctorDb = Pick<
+  PrismaService,
+  'staffType' | 'membershipStaffType' | 'clinicMembership'
+>;
+
 /** The active memberships of `clinicId` that have the doctor staff type. */
 export async function doctorMembershipIds(
-  prisma: PrismaService,
+  prisma: DoctorDb,
   clinicId: string,
 ): Promise<string[]> {
   const doctorType = await prisma.staffType.findUnique({
@@ -30,7 +36,7 @@ export async function doctorMembershipIds(
 
 /** Whether `membershipId` is an active doctor of `clinicId`. */
 export async function isActiveDoctor(
-  prisma: PrismaService,
+  prisma: DoctorDb,
   clinicId: string,
   membershipId: string,
 ): Promise<boolean> {
@@ -39,7 +45,7 @@ export async function isActiveDoctor(
 
 /** Full names of the users behind memberships, keyed by membership id. */
 export async function memberNames(
-  prisma: PrismaService,
+  prisma: Pick<PrismaService, 'clinicMembership' | 'user'>,
   membershipIds: string[],
 ): Promise<Map<string, string>> {
   const ids = [...new Set(membershipIds)];

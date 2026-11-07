@@ -17,30 +17,42 @@ import {
   ApiOkResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import type { PermissionScope } from '../../generated/prisma/enums.js';
-import type { MembershipContext } from '../../common/auth/auth-request.js';
+import type {
+  MembershipContext,
+  WorkspaceContext,
+} from '../../common/auth/auth-request.js';
 import {
   CurrentMembership,
   CurrentPermissions,
+  CurrentWorkspace,
   RequirePermission,
 } from '../../common/auth/decorators.js';
 import { P } from '../../common/auth/permission-catalog.js';
 import { ClinicId } from '../../common/clinic/clinic-id.decorator.js';
 import { ClinicScoped } from '../../common/clinic/clinic-scoped.decorator.js';
 import { ErrorResponseDto } from '../../core/http/error-response.dto.js';
+import { PermissionCodesDto } from '../access/dto/template.dto.js';
 import {
+  ApplyTemplateDto,
   CreatedStaffMemberDto,
-  CreateStaffAssignmentDto,
   CreateStaffMemberDto,
+  CreateWorkspaceDto,
   DoctorDto,
   PasswordResetDto,
   SetDoctorProfileDto,
-  StaffAssignmentDto,
   StaffMemberDto,
   UpdateStaffMemberDto,
+  UpdateWorkspaceDto,
+  WorkspaceDto,
 } from './dto/staff.dto.js';
-import { StaffAssignmentsService } from './staff-assignments.service.js';
 import { StaffService } from './staff.service.js';
+import { WorkspacesService } from './workspaces.service.js';
+
+const lastAdmin = {
+  type: ErrorResponseDto,
+  description:
+    'Would leave the clinic without an active admin workspace (reason last_admin)',
+};
 
 @ApiTags('staff')
 @ClinicScoped()
@@ -48,7 +60,7 @@ import { StaffService } from './staff.service.js';
 export class StaffController {
   constructor(private readonly staff: StaffService) {}
 
-  /** Every member of the clinic with staff types, roles and doctor profile. */
+  /** Every member of the clinic with staff types, workspaces and doctor profile. */
   @Get()
   @RequirePermission(P.staffView)
   @ApiOkResponse({ type: [StaffMemberDto] })
@@ -67,11 +79,13 @@ export class StaffController {
   }
 
   /**
-   * Adds someone by mobile. A new account gets a temporary password, returned
-   * once in `temporary_password`; they must change it at first login.
+   * Adds someone by mobile, with what they are (staff types) and their
+   * positions; a doctor also gets their practice workspace. Every workspace
+   * starts with no permissions. A new account gets a temporary password,
+   * returned once in `temporary_password`.
    */
   @Post()
-  @RequirePermission(P.staffManage)
+  @RequirePermission(P.staffCreate)
   @ApiCreatedResponse({ type: CreatedStaffMemberDto })
   @ApiConflictResponse({
     type: ErrorResponseDto,
@@ -79,27 +93,22 @@ export class StaffController {
   })
   create(
     @CurrentMembership() member: MembershipContext,
-    @CurrentPermissions() caller: Map<string, PermissionScope>,
     @Body() dto: CreateStaffMemberDto,
   ) {
-    return this.staff.create(member, caller, dto);
+    return this.staff.create(member, dto);
   }
 
-  /** Changes active state, staff types or roles. The clinic always keeps one active admin. */
+  /** Changes active state or staff types. */
   @Patch(':membershipId')
-  @RequirePermission(P.staffManage)
+  @RequirePermission(P.staffUpdate)
   @ApiOkResponse({ type: StaffMemberDto })
-  @ApiConflictResponse({
-    type: ErrorResponseDto,
-    description: 'Would leave the clinic without an active admin',
-  })
+  @ApiConflictResponse(lastAdmin)
   update(
     @CurrentMembership() member: MembershipContext,
-    @CurrentPermissions() caller: Map<string, PermissionScope>,
     @Param('membershipId') membershipId: string,
     @Body() dto: UpdateStaffMemberDto,
   ) {
-    return this.staff.update(member, caller, membershipId, dto);
+    return this.staff.update(member, membershipId, dto);
   }
 
   /**
@@ -109,7 +118,7 @@ export class StaffController {
    */
   @Post(':membershipId/reset-password')
   @HttpCode(HttpStatus.OK)
-  @RequirePermission(P.staffManage)
+  @RequirePermission(P.staffResetPassword)
   @ApiOkResponse({ type: PasswordResetDto })
   @ApiConflictResponse({
     type: ErrorResponseDto,
@@ -124,7 +133,7 @@ export class StaffController {
   }
 
   @Put(':membershipId/doctor-profile')
-  @RequirePermission(P.staffManage)
+  @RequirePermission(P.doctorProfileUpdate)
   @ApiOkResponse({ type: StaffMemberDto })
   @ApiConflictResponse({
     type: ErrorResponseDto,
@@ -141,41 +150,88 @@ export class StaffController {
 
 @ApiTags('staff')
 @ClinicScoped()
-@Controller('staff-assignments')
-export class StaffAssignmentsController {
-  constructor(private readonly assignments: StaffAssignmentsService) {}
+@Controller('workspaces')
+export class WorkspacesController {
+  constructor(private readonly workspaces: WorkspacesService) {}
 
+  /** Every position in the clinic, with its holder and grants. */
   @Get()
   @RequirePermission(P.staffView)
-  @ApiOkResponse({ type: [StaffAssignmentDto] })
+  @ApiOkResponse({ type: [WorkspaceDto] })
   list(@ClinicId() clinicId: string) {
-    return this.assignments.list(clinicId);
+    return this.workspaces.list(clinicId);
   }
 
-  /** Assigns a staff member to a doctor, e.g. as their secretary. */
+  /**
+   * Adds a position for a member: staff of a doctor, or clinic-wide. It
+   * starts with no permissions. Only an admin can create an admin workspace.
+   */
   @Post()
-  @RequirePermission(P.staffManage)
-  @ApiCreatedResponse({ type: StaffAssignmentDto })
+  @RequirePermission(P.workspaceCreate)
+  @ApiCreatedResponse({ type: WorkspaceDto })
   @ApiConflictResponse({
     type: ErrorResponseDto,
-    description: 'The assignment already exists',
+    description:
+      'The person already holds this position (reason duplicate_workspace)',
   })
   create(
     @CurrentMembership() member: MembershipContext,
-    @Body() dto: CreateStaffAssignmentDto,
+    @CurrentWorkspace() workspace: WorkspaceContext,
+    @Body() dto: CreateWorkspaceDto,
   ) {
-    return this.assignments.create(member, dto);
+    return this.workspaces.create(member, workspace, dto);
+  }
+
+  @Patch(':id')
+  @RequirePermission(P.workspaceUpdate)
+  @ApiOkResponse({ type: WorkspaceDto })
+  @ApiConflictResponse(lastAdmin)
+  update(
+    @CurrentMembership() member: MembershipContext,
+    @CurrentWorkspace() workspace: WorkspaceContext,
+    @Param('id') id: string,
+    @Body() dto: UpdateWorkspaceDto,
+  ) {
+    return this.workspaces.update(member, workspace, id, dto);
+  }
+
+  /** Replaces the workspace's grants; you can only grant items you hold. */
+  @Put(':id/permissions')
+  @RequirePermission(P.workspaceUpdate)
+  @ApiOkResponse({ type: WorkspaceDto })
+  setPermissions(
+    @CurrentMembership() member: MembershipContext,
+    @CurrentPermissions() caller: ReadonlySet<string>,
+    @Param('id') id: string,
+    @Body() dto: PermissionCodesDto,
+  ) {
+    return this.workspaces.setPermissions(member, caller, id, dto.permissions);
+  }
+
+  /** Adds a template's items to the workspace's grants. */
+  @Post(':id/apply-template')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission(P.workspaceUpdate)
+  @ApiOkResponse({ type: WorkspaceDto })
+  applyTemplate(
+    @CurrentMembership() member: MembershipContext,
+    @CurrentPermissions() caller: ReadonlySet<string>,
+    @Param('id') id: string,
+    @Body() dto: ApplyTemplateDto,
+  ) {
+    return this.workspaces.applyTemplate(member, caller, id, dto.template_id);
   }
 
   @Delete(':id')
-  @RequirePermission(P.staffManage)
   @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission(P.workspaceDelete)
   @ApiNoContentResponse()
+  @ApiConflictResponse(lastAdmin)
   remove(
     @CurrentMembership() member: MembershipContext,
     @Param('id') id: string,
   ) {
-    return this.assignments.remove(member, id);
+    return this.workspaces.remove(member, id);
   }
 }
 
@@ -185,10 +241,11 @@ export class StaffAssignmentsController {
 export class DoctorsController {
   constructor(private readonly staff: StaffService) {}
 
-  /** The clinic's active doctors, for the booking form. Any member may read it. */
+  /** The doctors the active workspace can book for: its own doctor, or all of the clinic's. */
   @Get()
+  @RequirePermission(P.appointmentView, P.appointmentCreate)
   @ApiOkResponse({ type: [DoctorDto] })
-  list(@ClinicId() clinicId: string) {
-    return this.staff.doctors(clinicId);
+  list(@CurrentWorkspace() workspace: WorkspaceContext) {
+    return this.staff.doctors(workspace);
   }
 }

@@ -20,11 +20,11 @@ model User {
 }
 
 /// One signed-in device. Holds the hash of its current refresh token and the
-/// clinic the user is working in.
+/// workspace the user is working in (which gives the clinic).
 model AuthSession {
   id                  String    @id @default(uuid(7)) @db.Char(36)
   user_id             String    @db.Char(36)
-  active_clinic_id    String?   @db.Char(36)
+  active_workspace_id String?   @db.Char(36)
   /// SHA-256 of the current refresh token.
   refresh_token_hash  String    @unique @db.Char(64)
   /// SHA-256 of the refresh token it replaced, to detect reuse.
@@ -41,7 +41,7 @@ model AuthSession {
   @@map("auth_sessions")
 }
 
-/// A user's membership in one clinic. Roles and staff types hang off this.
+/// A user's membership in one clinic. Staff types and workspaces hang off this.
 model ClinicMembership {
   id         String   @id @default(uuid(7)) @db.Char(36)
   clinic_id  String   @db.Char(36)

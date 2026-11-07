@@ -1,33 +1,50 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayUnique,
   IsArray,
   IsBoolean,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
+  ValidateNested,
 } from 'class-validator';
+import { WorkspaceKind } from '../../../generated/prisma/enums.js';
 import { IsIranianMobile } from '../../../common/validators/iranian-mobile.js';
 import { IsOptionalNonNull } from '../../../common/validators/optional.js';
 import { Trim, TrimToNull } from '../../../common/validators/transforms.js';
-import { IsUuid, UUID_PATTERN } from '../../../common/validators/uuid.js';
-
-const EACH_UUID = { each: true, message: 'each role id must be a UUID' };
-
-export class StaffRoleDto {
-  id: string;
-  code: string;
-  name: string;
-  is_system: boolean;
-}
+import { IsUuid } from '../../../common/validators/uuid.js';
 
 export class DoctorProfileDto {
   medical_license: string;
   specialty: string | null;
   license_verified: boolean;
+}
+
+/** A position of a person in the clinic, with its grants. */
+export class WorkspaceDto {
+  id: string;
+  membership_id: string;
+  /** The person holding it. */
+  member_name: string;
+  @ApiProperty({ enum: WorkspaceKind })
+  kind: WorkspaceKind;
+  /** The doctor whose data it sees; null for clinic-wide ones. */
+  doctor_membership_id: string | null;
+  doctor_name: string | null;
+  /** For staff workspaces: secretary_of, assistant_of, ... */
+  relationship_type: string | null;
+  /** Holds every permission, including ones added later. */
+  is_admin: boolean;
+  is_active: boolean;
+  /** e.g. «مدیر کلینیک», «مطب خودم», «دستیار پزشک: دکتر الف» */
+  label: string;
+  /** Granted catalogue codes (every code for an admin workspace). */
+  permissions: string[];
 }
 
 export class StaffMemberDto {
@@ -37,11 +54,11 @@ export class StaffMemberDto {
   mobile: string;
   is_active: boolean;
   joined_at: Date;
-  /** Codes: doctor, secretary, assistant. */
+  /** What the person is: doctor, secretary, assistant. */
   staff_types: string[];
 
-  @ApiProperty({ type: [StaffRoleDto] })
-  roles: StaffRoleDto[];
+  @ApiProperty({ type: [WorkspaceDto] })
+  workspaces: WorkspaceDto[];
 
   @ApiPropertyOptional({ type: DoctorProfileDto, nullable: true })
   doctor_profile: DoctorProfileDto | null;
@@ -61,6 +78,26 @@ const STAFF_TYPES_FIELD = {
     'each staff type must be a code such as doctor, secretary or assistant',
 };
 
+/** A position to create: a staff position for a doctor, or a clinic-wide one. */
+export class NewPositionDto {
+  @ApiProperty({ enum: ['staff', 'clinic'] })
+  @IsIn(['staff', 'clinic'])
+  kind: 'staff' | 'clinic';
+
+  /** Required for `staff`: the doctor the person works for. */
+  @IsOptional()
+  @IsUuid()
+  doctor_membership_id?: string;
+
+  /** Required for `staff`, e.g. `assistant_of`. */
+  @ApiPropertyOptional({ example: 'assistant_of' })
+  @IsOptional()
+  @Matches(/^[a-z_]{2,64}$/, {
+    message: 'relationship_type must be a code such as secretary_of',
+  })
+  relationship_type?: string;
+}
+
 export class CreateStaffMemberDto {
   /** Used only when no user has this mobile yet. */
   @Trim()
@@ -73,6 +110,7 @@ export class CreateStaffMemberDto {
   @IsIranianMobile()
   mobile: string;
 
+  /** A doctor also gets their own practice workspace. */
   @ApiProperty({ example: ['secretary'] })
   @IsArray()
   @ArrayUnique()
@@ -80,12 +118,14 @@ export class CreateStaffMemberDto {
   @Matches(/^[a-z_]{2,64}$/, STAFF_TYPES_FIELD)
   staff_types: string[];
 
-  /** System roles or this clinic's roles. */
+  /** Further positions, e.g. assistant of Dr A. Each starts with no permissions. */
+  @ApiPropertyOptional({ type: [NewPositionDto] })
+  @IsOptional()
   @IsArray()
-  @ArrayUnique()
   @ArrayMaxSize(20)
-  @Matches(UUID_PATTERN, EACH_UUID)
-  role_ids: string[];
+  @ValidateNested({ each: true })
+  @Type(() => NewPositionDto)
+  positions?: NewPositionDto[];
 }
 
 export class UpdateStaffMemberDto {
@@ -93,21 +133,13 @@ export class UpdateStaffMemberDto {
   @IsBoolean()
   is_active?: boolean;
 
-  /** Replaces the current set. */
+  /** Replaces the current set. Adding doctor creates their practice workspace. */
   @IsOptionalNonNull()
   @IsArray()
   @ArrayUnique()
   @ArrayMaxSize(10)
   @Matches(/^[a-z_]{2,64}$/, STAFF_TYPES_FIELD)
   staff_types?: string[];
-
-  /** Replaces the current set. */
-  @IsOptionalNonNull()
-  @IsArray()
-  @ArrayUnique()
-  @ArrayMaxSize(20)
-  @Matches(UUID_PATTERN, EACH_UUID)
-  role_ids?: string[];
 }
 
 export class PasswordResetDto {
@@ -140,29 +172,28 @@ export class DoctorDto {
   specialty: string | null;
 }
 
-export class StaffAssignmentDto {
-  id: string;
-  staff_membership_id: string;
-  staff_name: string;
-  doctor_membership_id: string;
-  doctor_name: string;
-  /** e.g. secretary_of */
-  relationship_type: string;
-  relationship_name: string;
-  is_active: boolean;
-  created_at: Date;
+export class CreateWorkspaceDto extends NewPositionDto {
+  @IsUuid()
+  membership_id: string;
+
+  /** Clinic-wide only, and only an admin can create another admin. */
+  @IsOptionalNonNull()
+  @IsBoolean()
+  is_admin?: boolean;
 }
 
-export class CreateStaffAssignmentDto {
-  @IsUuid()
-  staff_membership_id: string;
+export class UpdateWorkspaceDto {
+  @IsOptionalNonNull()
+  @IsBoolean()
+  is_active?: boolean;
 
-  @IsUuid()
-  doctor_membership_id: string;
+  /** Clinic-wide workspaces only; only an admin can change it. */
+  @IsOptionalNonNull()
+  @IsBoolean()
+  is_admin?: boolean;
+}
 
-  @ApiProperty({ example: 'secretary_of' })
-  @Matches(/^[a-z_]{2,64}$/, {
-    message: 'relationship_type must be a code such as secretary_of',
-  })
-  relationship_type: string;
+export class ApplyTemplateDto {
+  @IsUuid()
+  template_id: string;
 }

@@ -9,13 +9,15 @@ import type { Appointment, Prisma } from '../../../generated/prisma/client.js';
 import type { AppointmentStatus } from '../../../generated/prisma/enums.js';
 import { audit } from '../../../common/audit/audit.js';
 import type {
-  AccessContext,
   MembershipContext,
+  WorkspaceContext,
 } from '../../../common/auth/auth-request.js';
 import {
-  allowedDoctorIds,
   appointmentScopeWhere,
+  canBookFor,
 } from '../../../common/auth/access-scope.js';
+import { P } from '../../../common/auth/permission-catalog.js';
+import { forbidden } from '../../../common/auth/permission.guard.js';
 import { isActiveDoctor, memberNames } from '../../../common/staff/doctors.js';
 import { PrismaService } from '../../../core/prisma/prisma.service.js';
 import {
@@ -34,6 +36,13 @@ const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 const LONGEST = Math.max(...APPOINTMENT_DURATIONS);
 
+/** The permission each target status needs on `PATCH /:id/status`. */
+const STATUS_PERMISSION: Partial<Record<AppointmentStatus, string>> = {
+  confirmed: P.appointmentConfirm,
+  completed: P.appointmentComplete,
+  no_show: P.appointmentNoShow,
+};
+
 /** A 400 in the same shape as a validation error, for one field. */
 function fieldError(field: string, error: string) {
   return new BadRequestException({
@@ -46,12 +55,8 @@ function fieldError(field: string, error: string) {
 export class AppointmentsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** The appointments the caller's scope reaches, by start time. */
-  async list(
-    member: MembershipContext,
-    access: AccessContext,
-    query: ListAppointmentsQueryDto,
-  ) {
+  /** The appointments the workspace sees, by start time. */
+  async list(workspace: WorkspaceContext, query: ListAppointmentsQueryDto) {
     const { from, to, status, client_id } = query;
     if ((from === undefined) !== (to === undefined)) {
       throw new BadRequestException('from and to must be sent together');
@@ -75,31 +80,26 @@ export class AppointmentsService {
 
     const rows = await this.prisma.appointment.findMany({
       where: {
-        clinic_id: member.clinic_id,
         client_id,
         status,
         start_time,
-        ...(await appointmentScopeWhere(this.prisma, access.scope, member)),
+        ...appointmentScopeWhere(workspace),
       },
       orderBy: [{ start_time: 'asc' }, { id: 'asc' }],
     });
     return this.withDetails(rows);
   }
 
-  async get(
-    member: MembershipContext,
-    access: AccessContext,
-    id: string,
-  ): Promise<AppointmentDto> {
+  async get(workspace: WorkspaceContext, id: string): Promise<AppointmentDto> {
     const [appointment] = await this.withDetails([
-      await this.visible(member, access, id),
+      await this.visible(workspace, id),
     ]);
     return appointment;
   }
 
   async create(
     member: MembershipContext,
-    access: AccessContext,
+    workspace: WorkspaceContext,
     dto: CreateAppointmentDto,
   ) {
     await this.assertClient(member.clinic_id, dto.client_id);
@@ -107,7 +107,7 @@ export class AppointmentsService {
       member.clinic_id,
       dto.service_id,
     );
-    await this.assertDoctor(member, access, dto.doctor_membership_id);
+    await this.assertDoctor(workspace, dto.doctor_membership_id);
 
     const start = new Date(dto.start_time);
     const duration =
@@ -126,21 +126,22 @@ export class AppointmentsService {
         service_id: service.id,
         doctor_membership_id: dto.doctor_membership_id,
         created_by_membership_id: member.id,
+        created_by_workspace_id: workspace.id,
         start_time: start,
         duration_minutes: duration,
         description: dto.description ?? null,
       },
     });
-    return this.get(member, { ...access, scope: 'clinic' }, created.id);
+    return this.load(member.clinic_id, created.id);
   }
 
   async update(
     member: MembershipContext,
-    access: AccessContext,
+    workspace: WorkspaceContext,
     id: string,
     dto: UpdateAppointmentDto,
   ) {
-    const current = await this.visible(member, access, id);
+    const current = await this.visible(workspace, id);
     if (!isEditable(current.status)) {
       throw new ConflictException(
         `A ${current.status} appointment can no longer be edited`,
@@ -157,7 +158,7 @@ export class AppointmentsService {
       dto.doctor_membership_id &&
       dto.doctor_membership_id !== current.doctor_membership_id
     ) {
-      await this.assertDoctor(member, access, dto.doctor_membership_id);
+      await this.assertDoctor(workspace, dto.doctor_membership_id);
     }
     const start = dto.start_time
       ? new Date(dto.start_time)
@@ -181,21 +182,33 @@ export class AppointmentsService {
         description: dto.description,
       },
     });
-    return this.get(member, { ...access, scope: 'clinic' }, id);
+    return this.load(member.clinic_id, id);
   }
 
-  /** Confirm, complete or mark a no-show. Cancelling is `cancel()`. */
+  /**
+   * Confirm, complete or mark a no-show; each needs its own permission
+   * (`appointment.confirm`, `.complete`, `.no_show`). Cancelling is `cancel()`.
+   */
   changeStatus(
     member: MembershipContext,
-    access: AccessContext,
+    workspace: WorkspaceContext,
+    permissions: ReadonlySet<string>,
     id: string,
     status: AppointmentStatus,
   ) {
-    return this.setStatus(member, access, id, status);
+    const needed = STATUS_PERMISSION[status];
+    if (!needed)
+      throw fieldError('status', 'Use the cancel endpoint to cancel');
+    if (!permissions.has(needed)) throw forbidden(needed);
+    return this.setStatus(member, workspace, id, status);
   }
 
-  async cancel(member: MembershipContext, access: AccessContext, id: string) {
-    const result = await this.setStatus(member, access, id, 'cancelled');
+  async cancel(
+    member: MembershipContext,
+    workspace: WorkspaceContext,
+    id: string,
+  ) {
+    const result = await this.setStatus(member, workspace, id, 'cancelled');
     await audit(this.prisma, member, {
       action: 'appointment.cancelled',
       resource_type: 'appointment',
@@ -204,13 +217,31 @@ export class AppointmentsService {
     return result;
   }
 
+  /** Hides the appointment everywhere (soft delete); it no longer blocks the doctor's time. */
+  async remove(
+    member: MembershipContext,
+    workspace: WorkspaceContext,
+    id: string,
+  ): Promise<void> {
+    await this.visible(workspace, id);
+    await this.prisma.appointment.update({
+      where: { id, clinic_id: member.clinic_id },
+      data: { deleted_at: new Date() },
+    });
+    await audit(this.prisma, member, {
+      action: 'appointment.deleted',
+      resource_type: 'appointment',
+      resource_id: id,
+    });
+  }
+
   private async setStatus(
     member: MembershipContext,
-    access: AccessContext,
+    workspace: WorkspaceContext,
     id: string,
     status: AppointmentStatus,
   ) {
-    const current = await this.visible(member, access, id);
+    const current = await this.visible(workspace, id);
     if (current.status !== status) {
       if (!canChangeStatus(current.status, status)) {
         throw new ConflictException(
@@ -228,24 +259,28 @@ export class AppointmentsService {
         );
       }
     }
-    return this.get(member, { ...access, scope: 'clinic' }, id);
+    return this.load(member.clinic_id, id);
   }
 
-  /** The appointment, if the caller's scope reaches it; otherwise 404. */
+  /** The appointment, if the workspace sees it; otherwise 404. */
   private async visible(
-    member: MembershipContext,
-    access: AccessContext,
+    workspace: WorkspaceContext,
     id: string,
   ): Promise<Appointment> {
     const appointment = await this.prisma.appointment.findFirst({
-      where: {
-        id,
-        clinic_id: member.clinic_id,
-        ...(await appointmentScopeWhere(this.prisma, access.scope, member)),
-      },
+      where: { id, ...appointmentScopeWhere(workspace) },
     });
     if (!appointment) throw new NotFoundException('Appointment not found');
     return appointment;
+  }
+
+  /** The appointment after a change the caller was allowed to make (it may now be another doctor's). */
+  private async load(clinicId: string, id: string): Promise<AppointmentDto> {
+    const appointment = await this.prisma.appointment.findFirstOrThrow({
+      where: { id, clinic_id: clinicId, deleted_at: null },
+    });
+    const [result] = await this.withDetails([appointment]);
+    return result;
   }
 
   /** Attaches client, service and doctor, with one query per kind for all rows. */
@@ -290,7 +325,7 @@ export class AppointmentsService {
 
   private async assertClient(clinicId: string, clientId: string) {
     const client = await this.prisma.client.findFirst({
-      where: { id: clientId, clinic_id: clinicId },
+      where: { id: clientId, clinic_id: clinicId, deleted_at: null },
       select: { id: true },
     });
     if (!client)
@@ -314,22 +349,17 @@ export class AppointmentsService {
     return service;
   }
 
-  /** The doctor must be an active doctor of the clinic, and one the caller's scope lets them book for. */
-  private async assertDoctor(
-    member: MembershipContext,
-    access: AccessContext,
-    doctorId: string,
-  ) {
-    if (!(await isActiveDoctor(this.prisma, member.clinic_id, doctorId))) {
+  /** The doctor must be an active doctor of the clinic, and the workspace's own doctor unless it is clinic-wide. */
+  private async assertDoctor(workspace: WorkspaceContext, doctorId: string) {
+    if (!(await isActiveDoctor(this.prisma, workspace.clinic_id, doctorId))) {
       throw fieldError(
         'doctor_membership_id',
         'doctor_membership_id is not an active doctor of this clinic',
       );
     }
-    const allowed = await allowedDoctorIds(this.prisma, access.scope, member);
-    if (allowed !== null && !allowed.includes(doctorId)) {
+    if (!canBookFor(workspace, doctorId)) {
       throw new ForbiddenException({
-        message: 'You can only book appointments for your own doctors',
+        message: 'This workspace can only book for its own doctor',
         details: { reason: 'doctor_not_allowed' },
       });
     }
@@ -347,6 +377,7 @@ export class AppointmentsService {
       where: {
         clinic_id: clinicId,
         doctor_membership_id: doctorId,
+        deleted_at: null,
         status: { in: ['pending', 'confirmed'] },
         id: exceptId ? { not: exceptId } : undefined,
         start_time: {

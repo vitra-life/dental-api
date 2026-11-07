@@ -15,6 +15,10 @@ model Appointment {
   doctor_membership_id     String?           @db.Char(36)
   /// The membership that booked it.
   created_by_membership_id String?           @db.Char(36)
+  /// The workspace it was booked in.
+  created_by_workspace_id  String?           @db.Char(36)
+  /// Set when deleted; deleted appointments are hidden everywhere.
+  deleted_at               DateTime?
   /// Stored in UTC.
   start_time               DateTime
   /// One of 20, 30, 45, 60, 90 or 120 (see appointment-duration.ts).
@@ -25,6 +29,7 @@ model Appointment {
   updated_at               DateTime          @updatedAt
 
   @@index([clinic_id, start_time])
+  @@index([clinic_id, deleted_at])
   @@index([clinic_id, doctor_membership_id, start_time])
   @@index([client_id])
   @@index([service_id])

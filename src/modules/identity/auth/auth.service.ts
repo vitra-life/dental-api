@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import type { AuthContext } from '../../../common/auth/auth-request.js';
-import { effectivePermissions } from '../../../common/auth/effective-permissions.js';
+import { workspacePermissions } from '../../../common/auth/workspace-permissions.js';
 import { hashPassword, verifyPassword } from '../../../common/auth/password.js';
 import {
   ACCESS_TOKEN_TTL_SECONDS,
@@ -14,6 +14,7 @@ import {
   REFRESH_TOKEN_TTL_MS,
   sha256,
 } from '../../../common/auth/tokens.js';
+import { describeWorkspaces } from '../../../common/workspace/describe.js';
 import { PrismaService } from '../../../core/prisma/prisma.service.js';
 import type { MeClinicDto, MeDto, TokensDto } from './dto/auth-response.dto.js';
 import type { ChangePasswordDto, LoginDto } from './dto/auth.dto.js';
@@ -82,13 +83,15 @@ export class AuthService {
       data: { failed_login_attempts: 0, locked_until: null },
     });
 
-    const clinics = await this.clinicsOf(user.id);
+    const workspaces = (await this.clinicsOf(user.id)).flatMap(
+      (c) => c.workspaces,
+    );
     const refreshToken = newRefreshToken();
     const session = await this.prisma.authSession.create({
       data: {
         user_id: user.id,
-        // With a single clinic there is nothing to choose.
-        active_clinic_id: clinics.length === 1 ? clinics[0].clinic_id : null,
+        // With a single workspace there is nothing to choose.
+        active_workspace_id: workspaces.length === 1 ? workspaces[0].id : null,
         refresh_token_hash: sha256(refreshToken),
         expires_at: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
         user_agent: userAgent?.slice(0, 255) ?? null,
@@ -98,13 +101,13 @@ export class AuthService {
       ...(await this.accessToken(
         user.id,
         session.id,
-        session.active_clinic_id,
+        session.active_workspace_id,
       )),
       refresh_token: refreshToken,
       me: await this.me({
         user_id: user.id,
         session_id: session.id,
-        clinic_id: session.active_clinic_id,
+        workspace_id: session.active_workspace_id,
       }),
     };
   }
@@ -152,47 +155,39 @@ export class AuthService {
     const auth = {
       user_id: session.user_id,
       session_id: session.id,
-      clinic_id: session.active_clinic_id,
+      workspace_id: session.active_workspace_id,
     };
     return {
       ...(await this.accessToken(
         auth.user_id,
         auth.session_id,
-        auth.clinic_id,
+        auth.workspace_id,
       )),
       refresh_token: next,
       me: await this.me(auth),
     };
   }
 
-  /** Makes `clinicId` the session's active clinic. */
-  async switchClinic(
+  /** Makes `workspaceId` the session's active workspace (and so its clinic). */
+  async switchWorkspace(
     auth: AuthContext,
-    clinicId: string,
+    workspaceId: string,
   ): Promise<AccessToken & { me: MeDto }> {
-    const clinic = await this.prisma.clinic.findUnique({
-      where: { id: clinicId },
-      select: { is_active: true },
-    });
-    const membership = await this.prisma.clinicMembership.findUnique({
-      where: {
-        clinic_id_user_id: { clinic_id: clinicId, user_id: auth.user_id },
-      },
-      select: { is_active: true },
-    });
-    if (!clinic?.is_active || !membership?.is_active) {
+    const usable = (await this.clinicsOf(auth.user_id)).some((c) =>
+      c.workspaces.some((w) => w.id === workspaceId),
+    );
+    if (!usable) {
       throw new ForbiddenException(
-        'You are not an active member of this clinic',
+        'This workspace is not yours, or it is not active',
       );
     }
     await this.prisma.authSession.update({
       where: { id: auth.session_id },
-      data: { active_clinic_id: clinicId },
+      data: { active_workspace_id: workspaceId },
     });
-    const next = { ...auth, clinic_id: clinicId };
     return {
-      ...(await this.accessToken(auth.user_id, auth.session_id, clinicId)),
-      me: await this.me(next),
+      ...(await this.accessToken(auth.user_id, auth.session_id, workspaceId)),
+      me: await this.me({ ...auth, workspace_id: workspaceId }),
     };
   }
 
@@ -250,19 +245,18 @@ export class AuthService {
       },
     });
     const clinics = await this.clinicsOf(auth.user_id);
-    const active = clinics.find((c) => c.clinic_id === auth.clinic_id);
+    const clinic = clinics.find((c) =>
+      c.workspaces.some((w) => w.id === auth.workspace_id),
+    );
+    const active = clinic?.workspaces.find((w) => w.id === auth.workspace_id);
     const permissions = active
-      ? [
-          ...(await effectivePermissions(this.prisma, {
-            id: active.membership_id,
-            clinic_id: active.clinic_id,
-          })),
-        ].map(([code, scope]) => ({ code, scope }))
+      ? [...(await workspacePermissions(this.prisma, active))]
       : [];
     return {
       user,
       clinics,
-      active_clinic_id: active ? active.clinic_id : null,
+      active_workspace_id: active?.id ?? null,
+      active_clinic_id: clinic?.clinic_id ?? null,
       permissions,
     };
   }
@@ -270,12 +264,12 @@ export class AuthService {
   private async accessToken(
     userId: string,
     sessionId: string,
-    clinicId: string | null,
+    workspaceId: string | null,
   ): Promise<AccessToken> {
     const claims: AccessTokenClaims = {
       sub: userId,
       sid: sessionId,
-      cid: clinicId,
+      wid: workspaceId,
     };
     return {
       access_token: await this.jwt.signAsync(claims, {
@@ -286,7 +280,11 @@ export class AuthService {
     };
   }
 
-  /** The user's active memberships in active clinics, with their roles and staff types. */
+  /**
+   * The user's active clinics with their staff types and active workspaces.
+   * A clinic where the user has no active workspace is left out: there is
+   * nothing they could do in it.
+   */
   private async clinicsOf(userId: string): Promise<MeClinicDto[]> {
     const memberships = await this.prisma.clinicMembership.findMany({
       where: { user_id: userId, is_active: true },
@@ -300,56 +298,44 @@ export class AuthService {
       },
     });
     const clinicName = new Map(clinics.map((c) => [c.id, c.name]));
-    const ids = memberships
-      .filter((m) => clinicName.has(m.clinic_id))
-      .map((m) => m.id);
-
-    const [roleLinks, typeLinks] = await Promise.all([
-      this.prisma.membershipRole.findMany({
-        where: { membership_id: { in: ids } },
+    const usable = memberships.filter((m) => clinicName.has(m.clinic_id));
+    const ids = usable.map((m) => m.id);
+    const [workspaces, typeLinks] = await Promise.all([
+      this.prisma.workspace.findMany({
+        where: { membership_id: { in: ids }, is_active: true },
+        orderBy: [{ is_admin: 'desc' }, { created_at: 'asc' }],
       }),
       this.prisma.membershipStaffType.findMany({
         where: { membership_id: { in: ids } },
       }),
     ]);
-    const [roles, types] = await Promise.all([
-      this.prisma.role.findMany({
-        where: { id: { in: roleLinks.map((l) => l.role_id) } },
-      }),
-      this.prisma.staffType.findMany({
-        where: { id: { in: typeLinks.map((l) => l.staff_type_id) } },
-      }),
-    ]);
-    const roleById = new Map(roles.map((r) => [r.id, r]));
+    const types = await this.prisma.staffType.findMany({
+      where: { id: { in: typeLinks.map((l) => l.staff_type_id) } },
+    });
     const typeById = new Map(types.map((t) => [t.id, t.code]));
-
-    return memberships
-      .filter((m) => clinicName.has(m.clinic_id))
+    const described = await describeWorkspaces(this.prisma, workspaces);
+    return usable
       .map((m) => ({
         clinic_id: m.clinic_id,
         clinic_name: clinicName.get(m.clinic_id)!,
         membership_id: m.id,
-        roles: roleLinks
-          .filter((l) => l.membership_id === m.id)
-          .map((l) => roleById.get(l.role_id))
-          // A role only counts in its own clinic, or if it is a system role.
-          .filter(
-            (r) =>
-              r !== undefined && (r.is_system || r.clinic_id === m.clinic_id),
-          )
-          .map((r) => ({
-            id: r!.id,
-            code: r!.code,
-            name: r!.name,
-            is_system: r!.is_system,
-          })),
         staff_types: typeLinks
           .filter((l) => l.membership_id === m.id)
-          .flatMap((l) =>
-            typeById.has(l.staff_type_id)
-              ? [typeById.get(l.staff_type_id)!]
-              : [],
-          ),
-      }));
+          .flatMap((l) => typeById.get(l.staff_type_id) ?? []),
+        workspaces: described
+          .filter(
+            (w) => w.membership_id === m.id && w.clinic_id === m.clinic_id,
+          )
+          .map((w) => ({
+            id: w.id,
+            kind: w.kind,
+            doctor_membership_id: w.doctor_membership_id,
+            doctor_name: w.doctor_name,
+            relationship_type: w.relationship_type,
+            is_admin: w.is_admin,
+            label: w.label,
+          })),
+      }))
+      .filter((c) => c.workspaces.length > 0);
   }
 }

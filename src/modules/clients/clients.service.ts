@@ -1,9 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type { Client, Prisma } from '../../generated/prisma/client.js';
 import { audit } from '../../common/audit/audit.js';
 import type {
-  AccessContext,
   MembershipContext,
+  WorkspaceContext,
 } from '../../common/auth/auth-request.js';
 import { clientScopeWhere } from '../../common/auth/access-scope.js';
 import { Page, pageArgs } from '../../common/dto/page-query.dto.js';
@@ -22,19 +26,17 @@ import { UpdateClientDto } from './dto/update-client.dto.js';
 export class ClientsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** The clients the caller's scope reaches, newest first. */
+  /** The clients the workspace sees, newest first. */
   async list(
-    member: MembershipContext,
-    access: AccessContext,
+    workspace: WorkspaceContext,
     query: ListClientsQueryDto,
   ): Promise<Page<ClientDto>> {
     const words = toLatinDigits(query.q ?? '')
       .split(/\s+/)
       .filter(Boolean);
     const where: Prisma.ClientWhereInput = {
-      clinic_id: member.clinic_id,
       AND: [
-        await clientScopeWhere(this.prisma, access.scope, member),
+        await clientScopeWhere(this.prisma, workspace),
         ...words.map((word) => ({
           OR: [
             { first_name: { contains: word } },
@@ -54,29 +56,27 @@ export class ClientsService {
       this.prisma.client.count({ where }),
     ]);
     return {
-      items: await this.withVisits(member.clinic_id, clients),
+      items: await this.withVisits(workspace.clinic_id, clients),
       total,
       page: query.page,
       page_size: query.page_size,
     };
   }
 
-  /** A client, if the caller's scope reaches it; otherwise 404. */
-  async get(
-    member: MembershipContext,
-    access: AccessContext,
-    id: string,
-  ): Promise<ClientDto> {
-    const [result] = await this.withVisits(member.clinic_id, [
-      await this.visible(member, access, id),
+  /** A client, if the workspace sees it; otherwise 404. */
+  async get(workspace: WorkspaceContext, id: string): Promise<ClientDto> {
+    const [result] = await this.withVisits(workspace.clinic_id, [
+      await this.visible(workspace, id),
     ]);
     return result;
   }
 
   async create(
     member: MembershipContext,
+    workspace: WorkspaceContext,
     dto: CreateClientDto,
   ): Promise<ClientDto> {
+    await this.assertPhoneFree(member.clinic_id, dto.phone);
     const client = await this.prisma.client.create({
       data: {
         // The DTO is plain data; losing its prototype is intended.
@@ -85,6 +85,7 @@ export class ClientsService {
         ...birthDate(dto),
         clinic_id: member.clinic_id,
         created_by_membership_id: member.id,
+        created_by_workspace_id: workspace.id,
       },
     });
     return toClientDto(client, 0, null);
@@ -92,11 +93,12 @@ export class ClientsService {
 
   async update(
     member: MembershipContext,
-    access: AccessContext,
+    workspace: WorkspaceContext,
     id: string,
     dto: UpdateClientDto,
   ): Promise<ClientDto> {
-    await this.visible(member, access, id);
+    await this.visible(workspace, id);
+    if (dto.phone) await this.assertPhoneFree(member.clinic_id, dto.phone, id);
     await this.prisma.client.update({
       where: { id, clinic_id: member.clinic_id },
       // The DTO is plain data; losing its prototype is intended.
@@ -109,23 +111,75 @@ export class ClientsService {
       resource_id: id,
       details: { fields: Object.keys(dto) },
     });
-    return this.get(member, access, id);
+    return this.get(workspace, id);
+  }
+
+  /**
+   * Hides the client everywhere (soft delete) and cancels their upcoming
+   * pending and confirmed appointments; past ones stay in the history.
+   */
+  async remove(
+    member: MembershipContext,
+    workspace: WorkspaceContext,
+    id: string,
+  ): Promise<void> {
+    await this.visible(workspace, id);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.client.update({
+        where: { id, clinic_id: member.clinic_id },
+        data: { deleted_at: new Date() },
+      });
+      const cancelled = await tx.appointment.updateMany({
+        where: {
+          clinic_id: member.clinic_id,
+          client_id: id,
+          deleted_at: null,
+          status: { in: ['pending', 'confirmed'] },
+          start_time: { gte: new Date() },
+        },
+        data: { status: 'cancelled' },
+      });
+      await audit(tx, member, {
+        action: 'client.deleted',
+        resource_type: 'client',
+        resource_id: id,
+        details: { cancelled_appointments: cancelled.count },
+      });
+    });
   }
 
   private async visible(
-    member: MembershipContext,
-    access: AccessContext,
+    workspace: WorkspaceContext,
     id: string,
   ): Promise<Client> {
     const client = await this.prisma.client.findFirst({
-      where: {
-        id,
-        clinic_id: member.clinic_id,
-        ...(await clientScopeWhere(this.prisma, access.scope, member)),
-      },
+      where: { id, ...(await clientScopeWhere(this.prisma, workspace)) },
     });
     if (!client) throw new NotFoundException('Client not found');
     return client;
+  }
+
+  /** Phone numbers are unique among the clinic's non-deleted clients. */
+  private async assertPhoneFree(
+    clinicId: string,
+    phone: string,
+    exceptId?: string,
+  ): Promise<void> {
+    const taken = await this.prisma.client.findFirst({
+      where: {
+        clinic_id: clinicId,
+        phone,
+        deleted_at: null,
+        ...(exceptId ? { id: { not: exceptId } } : {}),
+      },
+      select: { id: true },
+    });
+    if (taken) {
+      throw new ConflictException({
+        message: 'The clinic already has a client with this phone number',
+        details: { reason: 'duplicate_phone' },
+      });
+    }
   }
 
   /** Adds each client's appointment count and last completed visit, with two queries for all of them. */
@@ -138,7 +192,11 @@ export class ClientsService {
     const [counts, visits] = await Promise.all([
       this.prisma.appointment.groupBy({
         by: ['client_id'],
-        where: { clinic_id: clinicId, client_id: { in: ids } },
+        where: {
+          clinic_id: clinicId,
+          client_id: { in: ids },
+          deleted_at: null,
+        },
         _count: { _all: true },
       }),
       this.prisma.appointment.groupBy({
@@ -146,6 +204,7 @@ export class ClientsService {
         where: {
           clinic_id: clinicId,
           client_id: { in: ids },
+          deleted_at: null,
           status: 'completed',
         },
         _max: { start_time: true },

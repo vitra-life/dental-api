@@ -8,12 +8,12 @@ import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../../core/prisma/prisma.service.js';
 import type { AuthRequest } from './auth-request.js';
 import { REQUIRED_PERMISSION } from './decorators.js';
-import { effectivePermissions } from './effective-permissions.js';
+import { workspacePermissions } from './workspace-permissions.js';
 
 /**
- * Checks `@RequirePermission(code)` against the caller's effective permissions
- * in the active clinic, and passes the scope they hold it at to the handler
- * (`@CurrentAccess()`). Runs after `ClinicGuard`.
+ * Checks `@RequirePermission(...)` against the active workspace's grants and
+ * leaves them on the request (`@CurrentPermissions()`). Runs after
+ * `WorkspaceGuard`.
  */
 @Injectable()
 export class PermissionGuard implements CanActivate {
@@ -23,28 +23,29 @@ export class PermissionGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const code = this.reflector.getAllAndOverride<string | undefined>(
+    const codes = this.reflector.getAllAndOverride<string[] | undefined>(
       REQUIRED_PERMISSION,
       [context.getHandler(), context.getClass()],
     );
-    if (!code) return true;
-
     const request = context.switchToHttp().getRequest<AuthRequest>();
-    if (!request.membership)
-      throw new Error('PermissionGuard needs ClinicGuard to run first');
-    request.permissions ??= await effectivePermissions(
+    if (!request.workspace)
+      throw new Error('PermissionGuard needs WorkspaceGuard to run first');
+    request.permissions ??= await workspacePermissions(
       this.prisma,
-      request.membership,
+      request.workspace,
     );
+    if (!codes?.length) return true;
 
-    const scope = request.permissions.get(code);
-    if (!scope) {
-      throw new ForbiddenException({
-        message: 'You do not have permission for this',
-        details: { permission: code },
-      });
+    if (!codes.some((code) => request.permissions!.has(code))) {
+      throw forbidden(codes[0]);
     }
-    request.access = { code, scope };
     return true;
   }
 }
+
+/** The 403 for a missing permission, also thrown by handlers that check one themselves. */
+export const forbidden = (code: string) =>
+  new ForbiddenException({
+    message: 'You do not have permission for this',
+    details: { permission: code },
+  });

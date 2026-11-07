@@ -1,5 +1,6 @@
 /**
- * Creates a clinic (or uses an existing one) and its first admin.
+ * Creates a clinic (or uses an existing one) and its first admin: a member
+ * with a clinic-wide admin workspace, which holds every permission.
  *
  *   npm run clinic:create -- --name "کلینیک مهر" --admin-mobile 09121234567 --admin-name "دکتر احمدی"
  *   npm run clinic:create -- --clinic-id <id> --admin-mobile 09121234567 --admin-name "…" [--staff-type doctor]
@@ -15,10 +16,6 @@ import {
   hashPassword,
   temporaryPassword,
 } from '../src/common/auth/password.js';
-import {
-  CLINIC_ADMIN_ROLE,
-  SYSTEM_ROLE_OWNER,
-} from '../src/common/auth/system-roles.js';
 import { toLatinDigits } from '../src/common/validators/transforms.js';
 import { mariadbConfig } from '../src/core/prisma/database-url.js';
 import { syncReferenceData } from '../src/modules/access/reference-data.js';
@@ -81,25 +78,30 @@ try {
     create: { clinic_id: clinic.id, user_id: user.id },
     update: { is_active: true },
   });
-  const adminRole = await prisma.role.findUniqueOrThrow({
+  // The admin workspace: clinic-wide, holds every permission.
+  const admin = await prisma.workspace.findFirst({
     where: {
-      owner_key_code: { owner_key: SYSTEM_ROLE_OWNER, code: CLINIC_ADMIN_ROLE },
-    },
-  });
-  await prisma.membershipRole.upsert({
-    where: {
-      membership_id_role_id: {
-        membership_id: membership.id,
-        role_id: adminRole.id,
-      },
-    },
-    create: {
       clinic_id: clinic.id,
       membership_id: membership.id,
-      role_id: adminRole.id,
+      kind: 'clinic',
+      is_admin: true,
     },
-    update: {},
   });
+  if (admin) {
+    await prisma.workspace.update({
+      where: { id: admin.id },
+      data: { is_active: true },
+    });
+  } else {
+    await prisma.workspace.create({
+      data: {
+        clinic_id: clinic.id,
+        membership_id: membership.id,
+        kind: 'clinic',
+        is_admin: true,
+      },
+    });
+  }
   for (const code of values['staff-type'] ?? []) {
     const type =
       (await prisma.staffType.findUnique({ where: { code } })) ??
@@ -118,6 +120,26 @@ try {
       },
       update: {},
     });
+    // A doctor also gets their own practice workspace (with no permissions yet).
+    if (code === 'doctor') {
+      const practice = await prisma.workspace.findFirst({
+        where: {
+          clinic_id: clinic.id,
+          membership_id: membership.id,
+          kind: 'doctor',
+        },
+      });
+      if (!practice) {
+        await prisma.workspace.create({
+          data: {
+            clinic_id: clinic.id,
+            membership_id: membership.id,
+            kind: 'doctor',
+            doctor_membership_id: membership.id,
+          },
+        });
+      }
+    }
   }
 
   console.log(`Clinic:      ${clinic.name} (${clinic.id})`);

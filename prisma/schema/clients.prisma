@@ -25,12 +25,19 @@ model Client {
   insurance_company        String?   @db.VarChar(255)
   insurance_number         String?   @db.VarChar(50)
   notes                    String?   @db.Text
-  /// The membership that registered the client; used by the `own` scope.
+  /// The membership that registered the client.
   created_by_membership_id String?   @db.Char(36)
+  /// The workspace it was registered in; a doctor's workspaces see it.
+  created_by_workspace_id  String?   @db.Char(36)
+  /// Set when deleted; deleted clients are hidden everywhere.
+  deleted_at               DateTime?
   created_at               DateTime  @default(now())
   updated_at               DateTime  @updatedAt
 
-  @@unique([clinic_id, phone])
-  @@index([clinic_id, created_by_membership_id])
+  /// Phone numbers are unique among a clinic's non-deleted clients; the
+  /// service checks it (a unique index would also count deleted ones).
+  @@index([clinic_id, phone])
+  @@index([clinic_id, deleted_at])
+  @@index([clinic_id, created_by_workspace_id])
   @@map("clients")
 }
