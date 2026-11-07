@@ -99,7 +99,7 @@ src/
     identity/auth/       /api/v1/auth (login, refresh, switch-clinic, me, change-password, logout)
     access/              /api/v1/roles, /permissions, /staff-types, /relationship-types, /audit-logs;
                          reference-data.ts (system roles and their grants)
-    staff/               /api/v1/staff, /staff-assignments, /doctors
+    staff/               /api/v1/staff (incl. reset-password), /staff-assignments, /doctors
 test/                    end-to-end tests, mirroring src/modules
   support/               app, clinic and request helpers
 ```
