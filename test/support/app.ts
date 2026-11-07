@@ -6,7 +6,6 @@ import { App } from 'supertest/types.js';
 import { AppModule } from '../../src/app.module.js';
 import { configureApp } from '../../src/app.setup.js';
 import { hashPassword } from '../../src/common/auth/password.js';
-import { SYSTEM_ROLE_OWNER } from '../../src/common/auth/system-roles.js';
 import { PrismaService } from '../../src/core/prisma/prisma.service.js';
 
 export async function createTestApp(): Promise<INestApplication<App>> {
@@ -41,7 +40,10 @@ export function asUser(app: INestApplication<App>, token: string) {
 
 export interface TestMember {
   userId: string;
+  clinicId: string;
   membershipId: string;
+  /** The workspace the member is signed in to; null if they have none. */
+  workspaceId: string | null;
   mobile: string;
   token: string;
   refreshToken: string;
@@ -69,18 +71,106 @@ export async function signIn(
   };
 }
 
+/** A position to create for a test member, and what it may do. */
+export interface WorkspaceSpec {
+  /** Default `clinic` (clinic-wide). `doctor` is the member's own practice. */
+  kind?: 'doctor' | 'staff' | 'clinic';
+  /** For `staff`: the doctor's membership id. */
+  doctor?: string;
+  /** For `staff`; default `secretary_of`. */
+  relationship?: string;
+  /** Clinic-wide admin: holds every permission. */
+  admin?: boolean;
+  /** Granted catalogue codes (default none). */
+  permissions?: string[];
+}
+
+/** Creates a workspace for a membership and grants it `spec.permissions`. */
+export async function addWorkspace(
+  app: INestApplication<App>,
+  clinicId: string,
+  membershipId: string,
+  spec: WorkspaceSpec = {},
+): Promise<string> {
+  const prisma = app.get(PrismaService);
+  const kind = spec.kind ?? 'clinic';
+  const relationship =
+    kind === 'staff'
+      ? await prisma.relationshipType.findUniqueOrThrow({
+          where: { code: spec.relationship ?? 'secretary_of' },
+        })
+      : null;
+  const workspace = await prisma.workspace.create({
+    data: {
+      clinic_id: clinicId,
+      membership_id: membershipId,
+      kind,
+      doctor_membership_id:
+        kind === 'doctor'
+          ? membershipId
+          : kind === 'staff'
+            ? spec.doctor!
+            : null,
+      relationship_type_id: relationship?.id ?? null,
+      is_admin: spec.admin ?? false,
+    },
+  });
+  await grant(app, workspace.id, spec.permissions ?? []);
+  return workspace.id;
+}
+
+/** Adds `codes` to a workspace's grants. */
+export async function grant(
+  app: INestApplication<App>,
+  workspaceId: string,
+  codes: string[],
+) {
+  if (codes.length === 0) return;
+  const prisma = app.get(PrismaService);
+  const workspace = await prisma.workspace.findUniqueOrThrow({
+    where: { id: workspaceId },
+  });
+  const permissions = await prisma.permission.findMany({
+    where: { code: { in: codes } },
+  });
+  if (permissions.length !== new Set(codes).size)
+    throw new Error(`Unknown permission codes in ${codes.join(', ')}`);
+  await prisma.workspacePermission.createMany({
+    data: permissions.map((p) => ({
+      clinic_id: workspace.clinic_id,
+      workspace_id: workspaceId,
+      permission_id: p.id,
+    })),
+    skipDuplicates: true,
+  });
+}
+
+/** Signs `member` in to `workspaceId` and returns the member with the new token. */
+export async function switchTo(
+  app: INestApplication<App>,
+  member: TestMember,
+  workspaceId: string,
+): Promise<TestMember> {
+  const response = await member.api
+    .post('/api/v1/auth/switch-workspace')
+    .send({ workspace_id: workspaceId })
+    .expect(200);
+  const token = response.body.access_token as string;
+  return { ...member, workspaceId, token, api: asUser(app, token) };
+}
+
 /**
- * Adds a signed-in member to `clinicId` with system roles (by code) and staff
- * types. The member belongs to this clinic only, so it is active at login.
+ * Adds a signed-in member to `clinicId` with staff types and one workspace
+ * (clinic-wide with no permissions unless `workspace` says otherwise; `null`
+ * for none). The member is signed in to that workspace.
  */
 export async function addMember(
   app: INestApplication<App>,
   clinicId: string,
   options: {
     name?: string;
-    roles?: string[];
     staffTypes?: string[];
-    roleIds?: string[];
+    workspace?: WorkspaceSpec | null;
   } = {},
 ): Promise<TestMember> {
   const prisma = app.get(PrismaService);
@@ -95,20 +185,10 @@ export async function addMember(
   const membership = await prisma.clinicMembership.create({
     data: { clinic_id: clinicId, user_id: user.id },
   });
-  const roles = await prisma.role.findMany({
-    where: { owner_key: SYSTEM_ROLE_OWNER, code: { in: options.roles ?? [] } },
-  });
-  await prisma.membershipRole.createMany({
-    data: [...roles.map((r) => r.id), ...(options.roleIds ?? [])].map(
-      (role_id) => ({
-        clinic_id: clinicId,
-        membership_id: membership.id,
-        role_id,
-      }),
-    ),
-  });
+  const staffTypes = new Set(options.staffTypes ?? []);
+  if (options.workspace?.kind === 'doctor') staffTypes.add('doctor');
   const types = await prisma.staffType.findMany({
-    where: { code: { in: options.staffTypes ?? [] } },
+    where: { code: { in: [...staffTypes] } },
   });
   await prisma.membershipStaffType.createMany({
     data: types.map((t) => ({
@@ -117,15 +197,24 @@ export async function addMember(
       staff_type_id: t.id,
     })),
   });
-  const { token, refreshToken } = await signIn(app, mobile);
-  return {
+  const workspaceId =
+    options.workspace === null
+      ? null
+      : await addWorkspace(app, clinicId, membership.id, options.workspace);
+  const { token, refreshToken, body } = await signIn(app, mobile);
+  const member: TestMember = {
     userId: user.id,
+    clinicId,
     membershipId: membership.id,
+    workspaceId,
     mobile,
     token,
     refreshToken,
     api: asUser(app, token),
   };
+  return workspaceId && body.me.active_workspace_id !== workspaceId
+    ? switchTo(app, member, workspaceId)
+    : member;
 }
 
 /**
@@ -141,8 +230,8 @@ export async function createClinic(
   const clinic = await prisma.clinic.create({ data: { name } });
   const admin = await addMember(app, clinic.id, {
     name: `مدیر ${name}`,
-    roles: ['clinic_admin'],
     staffTypes: options.adminStaffTypes ?? ['doctor'],
+    workspace: { admin: true },
   });
   return { id: clinic.id, admin };
 }
@@ -156,21 +245,21 @@ export async function deleteClinic(app: INestApplication<App>, id: string) {
   });
   const userIds = memberships.map((m) => m.user_id);
   const clinic = { clinic_id: id };
-  const roles = await prisma.role.findMany({
+  const templates = await prisma.permissionTemplate.findMany({
     where: clinic,
     select: { id: true },
   });
-  await prisma.rolePermission.deleteMany({
-    where: { role_id: { in: roles.map((r) => r.id) } },
+  await prisma.permissionTemplateItem.deleteMany({
+    where: { template_id: { in: templates.map((t) => t.id) } },
   });
-  await prisma.role.deleteMany({ where: clinic });
   for (const table of [
+    prisma.permissionTemplate,
     prisma.appointment,
     prisma.client,
     prisma.service,
-    prisma.membershipRole,
     prisma.membershipStaffType,
-    prisma.staffAssignment,
+    prisma.workspacePermission,
+    prisma.workspace,
     prisma.auditLog,
     prisma.clinicMembership,
   ] as unknown as {

@@ -15,7 +15,7 @@ cp .env.example .env      # then set the two MySQL passwords, DATABASE_URL and J
 npm run db:up             # start MySQL and wait until it is healthy
 npm run db:deploy         # apply the migrations
 npm run db:generate       # generate the Prisma client into src/generated/prisma
-npm run db:seed           # reference data (roles, permissions...) and the dev clinic; no sample data
+npm run db:seed           # reference data (permissions, staff types...) and the dev clinic; no sample data
 npm run clinic:create -- --clinic-id 00000000-0000-7000-8000-000000000001 \
   --admin-mobile 09121234567 --admin-name "Your name" --staff-type doctor
                           # your first login: prints a temporary password
@@ -66,7 +66,7 @@ prisma/
     catalog.prisma       services
     scheduling.prisma    appointments
     identity.prisma      users, auth_sessions, clinic_memberships
-    access.prisma        roles, permissions, role_permissions, membership_roles
+    access.prisma        workspaces, workspace_permissions, permissions, permission templates
     staff.prisma         staff types, doctor profiles, relationship types, staff assignments
     audit.prisma         audit_logs
   migrations/            SQL migrations, committed
@@ -86,8 +86,9 @@ src/
     health/              /health
   common/                building blocks shared by two or more features
     auth/                AuthGuard (global), PermissionGuard, decorators, the permission catalogue,
-                         scopes (access-scope.ts), delegation rules, passwords and tokens
-    clinic/              ClinicGuard, @ClinicScoped(), @ClinicId(): the session's active clinic
+                         workspace visibility (access-scope.ts), delegation, passwords and tokens
+    clinic/              @ClinicScoped(), @ClinicId(): the active workspace's clinic
+    workspace/           WorkspaceGuard (the session's active workspace), workspace labels
     audit/               audit(): writes audit_logs
     staff/               doctor lookups shared by appointments and staff
     dto/                 pagination
@@ -96,10 +97,10 @@ src/
     clients/             /api/v1/clients
     catalog/services/    /api/v1/services
     scheduling/appointments/  /api/v1/appointments (edit, status changes, cancel)
-    identity/auth/       /api/v1/auth (login, refresh, switch-clinic, me, change-password, logout)
-    access/              /api/v1/roles, /permissions, /staff-types, /relationship-types, /audit-logs;
-                         reference-data.ts (system roles and their grants)
-    staff/               /api/v1/staff, /staff-assignments, /doctors
+    identity/auth/       /api/v1/auth (login, refresh, switch-workspace, me, change-password, logout)
+    access/              /api/v1/permission-templates, /permissions, /staff-types, /relationship-types,
+                         /audit-logs; reference-data.ts (catalogue sync, old codes → new items)
+    staff/               /api/v1/staff (incl. reset-password), /workspaces, /doctors
 test/                    end-to-end tests, mirroring src/modules
   support/               app, clinic and request helpers
 ```
@@ -120,11 +121,11 @@ test/                    end-to-end tests, mirroring src/modules
 - **Errors** all have the shape of `ErrorResponseDto`: `status_code`, `error`, `message`, optional `details`, `path`, `request_id`, `timestamp`. Throw Nest's HTTP exceptions; do not build error bodies by hand.
 - **No foreign keys, triggers or views.** Every table stands alone, so it can be moved or exported by itself. Models have plain id columns and no `@relation`; services check that referenced rows exist in the same clinic, and join in code. Index every id column you look up by.
 - **Login:** `POST /api/v1/auth/login` with mobile and password returns a 15-minute access token (`Authorization: Bearer …`) and a refresh token that is replaced on every `POST /auth/refresh`. Five wrong passwords lock the account for 15 minutes. Every route needs a token unless marked `@Public()`.
-- **Clinic scoping:** the active clinic belongs to the session (chosen at login when the user has one clinic, or with `POST /auth/switch-clinic`); there is no clinic header. `@ClinicScoped()` checks on every request that the clinic is active and the user still an active member. Every query filters by `clinic_id`, so another clinic's record is a 404.
-- **Permissions:** `src/common/auth/permission-catalog.ts` lists every page, feature and action; `npm run db:seed` copies it into `permissions`. A route declares `@RequirePermission(P.someAction)`. An item works only if its page is granted too; with several roles the widest scope wins.
-- **Scopes:** data actions carry `own` (my records), `assigned` (also those of doctors I'm assigned to) or `clinic`. Use the helpers in `access-scope.ts` and `@CurrentAccess()` to filter; don't re-implement them.
-- **Roles:** system roles are defined in `modules/access/reference-data.ts` and can't be changed through the API. Custom roles belong to one clinic. Nobody can grant a permission they don't hold, at a wider scope than theirs, and the last active clinic admin can't be removed.
-- **Audit:** call `audit()` for sensitive changes (roles, permissions, memberships, assignments, client updates, cancellations).
+- **Workspaces:** a workspace is one position of a person in a clinic: a doctor's own practice, a secretary/assistant *of* a doctor, or clinic-wide (the admin, a front desk). The session holds the active workspace (picked at login when the user has exactly one, or with `POST /auth/switch-workspace`); there is no clinic header. `@ClinicScoped()` runs `WorkspaceGuard`, which checks on every request that the workspace, its membership and its clinic are active, and sets `@CurrentWorkspace()`, `@CurrentMembership()` and `@ClinicId()`.
+- **Permissions:** `src/common/auth/permission-catalog.ts` lists every action as one `resource.action` item, in groups; `npm run db:seed` copies it into `permissions` (and moves grants on the old tree codes onto the new items). Grants belong to a workspace and start empty; an admin workspace holds every item. A route declares `@RequirePermission(P.someAction)` (several codes = any of them).
+- **Visibility:** a doctor-bound workspace sees that doctor's appointments, and the clients who have one with that doctor or were registered in the workspace; a clinic-wide workspace sees the whole clinic. Use `access-scope.ts` (`appointmentScopeWhere`, `clientScopeWhere`, `canBookFor`); don't re-implement them. Deleted clients and appointments (`deleted_at`) are invisible everywhere.
+- **Granting:** nobody can grant a permission they don't hold (`grants.ts`). Templates are a clinic's reusable sets; applying one copies its items into a workspace. Only an admin can create or change admin workspaces, and the clinic always keeps one active admin workspace.
+- **Audit:** call `audit()` for sensitive changes (memberships, workspaces and their grants, templates, client updates and deletions, appointment cancellations and deletions).
 - **Dates:** date-times are ISO 8601 with a time zone and are returned in UTC. Date-only fields (`birth_date`) are `YYYY-MM-DD`.
 - **Money** is integer Rial.
 - **Updates** are `PATCH` with any subset of fields; `null` clears an optional field and is rejected for a required one.
