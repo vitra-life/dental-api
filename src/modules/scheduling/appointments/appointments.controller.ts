@@ -36,6 +36,7 @@ import { CreateAppointmentDto } from './dto/create-appointment.dto.js';
 import { ListAppointmentsQueryDto } from './dto/list-appointments-query.dto.js';
 import { UpdateAppointmentStatusDto } from './dto/update-appointment-status.dto.js';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto.js';
+import { ParseIdPipe } from '../../../common/validators/parse-id.pipe.js';
 
 @ApiTags('appointments')
 @ClinicScoped()
@@ -59,7 +60,7 @@ export class AppointmentsController {
   @ApiOkResponse({ type: AppointmentDto })
   get(
     @CurrentWorkspace() workspace: WorkspaceContext,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
   ) {
     return this.appointments.get(workspace, id);
   }
@@ -92,7 +93,7 @@ export class AppointmentsController {
   update(
     @CurrentMembership() member: MembershipContext,
     @CurrentWorkspace() workspace: WorkspaceContext,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
     @Body() dto: UpdateAppointmentDto,
   ) {
     return this.appointments.update(member, workspace, id, dto);
@@ -118,7 +119,7 @@ export class AppointmentsController {
     @CurrentMembership() member: MembershipContext,
     @CurrentWorkspace() workspace: WorkspaceContext,
     @CurrentPermissions() permissions: ReadonlySet<string>,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
     @Body() dto: UpdateAppointmentStatusDto,
   ) {
     return this.appointments.changeStatus(
@@ -142,7 +143,7 @@ export class AppointmentsController {
   cancel(
     @CurrentMembership() member: MembershipContext,
     @CurrentWorkspace() workspace: WorkspaceContext,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
   ) {
     return this.appointments.cancel(member, workspace, id);
   }
@@ -155,7 +156,7 @@ export class AppointmentsController {
   remove(
     @CurrentMembership() member: MembershipContext,
     @CurrentWorkspace() workspace: WorkspaceContext,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
   ) {
     return this.appointments.remove(member, workspace, id);
   }

@@ -34,6 +34,7 @@ import {
   UpdatePermissionTemplateDto,
 } from './dto/template.dto.js';
 import { TemplatesService } from './templates.service.js';
+import { ParseIdPipe } from '../../common/validators/parse-id.pipe.js';
 
 @ApiTags('permission templates')
 @ClinicScoped()
@@ -51,7 +52,7 @@ export class TemplatesController {
   @Get(':id')
   @RequirePermission(P.templateView)
   @ApiOkResponse({ type: PermissionTemplateDto })
-  get(@ClinicId() clinicId: string, @Param('id') id: string) {
+  get(@ClinicId() clinicId: string, @Param('id', ParseIdPipe) id: string) {
     return this.templates.get(clinicId, id);
   }
 
@@ -75,7 +76,7 @@ export class TemplatesController {
   @ApiOkResponse({ type: PermissionTemplateDto })
   update(
     @CurrentMembership() member: MembershipContext,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
     @Body() dto: UpdatePermissionTemplateDto,
   ) {
     return this.templates.update(member, id, dto);
@@ -88,7 +89,7 @@ export class TemplatesController {
   setPermissions(
     @CurrentMembership() member: MembershipContext,
     @CurrentPermissions() caller: ReadonlySet<string>,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
     @Body() dto: PermissionCodesDto,
   ) {
     return this.templates.setPermissions(member, caller, id, dto.permissions);
@@ -101,7 +102,7 @@ export class TemplatesController {
   @ApiNoContentResponse()
   remove(
     @CurrentMembership() member: MembershipContext,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
   ) {
     return this.templates.remove(member, id);
   }

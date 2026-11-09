@@ -206,6 +206,16 @@ describe('Auth (e2e)', () => {
         .post('/api/v1/auth/change-password')
         .send({ current_password: TEST_PASSWORD, new_password: 'short' })
         .expect(400);
+      const same = await member.api
+        .post('/api/v1/auth/change-password')
+        .send({ current_password: TEST_PASSWORD, new_password: TEST_PASSWORD })
+        .expect(400);
+      expect(same.body.details).toEqual([
+        {
+          field: 'new_password',
+          errors: ['Choose a password different from the current one'],
+        },
+      ]);
       await member.api
         .post('/api/v1/auth/change-password')
         .send({

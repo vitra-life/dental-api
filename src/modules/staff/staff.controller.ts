@@ -47,6 +47,7 @@ import {
 } from './dto/staff.dto.js';
 import { StaffService } from './staff.service.js';
 import { WorkspacesService } from './workspaces.service.js';
+import { ParseIdPipe } from '../../common/validators/parse-id.pipe.js';
 
 const lastAdmin = {
   type: ErrorResponseDto,
@@ -73,7 +74,7 @@ export class StaffController {
   @ApiOkResponse({ type: StaffMemberDto })
   get(
     @ClinicId() clinicId: string,
-    @Param('membershipId') membershipId: string,
+    @Param('membershipId', ParseIdPipe) membershipId: string,
   ) {
     return this.staff.get(clinicId, membershipId);
   }
@@ -105,7 +106,7 @@ export class StaffController {
   @ApiConflictResponse(lastAdmin)
   update(
     @CurrentMembership() member: MembershipContext,
-    @Param('membershipId') membershipId: string,
+    @Param('membershipId', ParseIdPipe) membershipId: string,
     @Body() dto: UpdateStaffMemberDto,
   ) {
     return this.staff.update(member, membershipId, dto);
@@ -127,7 +128,7 @@ export class StaffController {
   })
   resetPassword(
     @CurrentMembership() member: MembershipContext,
-    @Param('membershipId') membershipId: string,
+    @Param('membershipId', ParseIdPipe) membershipId: string,
   ) {
     return this.staff.resetPassword(member, membershipId);
   }
@@ -141,7 +142,7 @@ export class StaffController {
   })
   setDoctorProfile(
     @CurrentMembership() member: MembershipContext,
-    @Param('membershipId') membershipId: string,
+    @Param('membershipId', ParseIdPipe) membershipId: string,
     @Body() dto: SetDoctorProfileDto,
   ) {
     return this.staff.setDoctorProfile(member, membershipId, dto);
@@ -189,7 +190,7 @@ export class WorkspacesController {
   update(
     @CurrentMembership() member: MembershipContext,
     @CurrentWorkspace() workspace: WorkspaceContext,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
     @Body() dto: UpdateWorkspaceDto,
   ) {
     return this.workspaces.update(member, workspace, id, dto);
@@ -202,7 +203,7 @@ export class WorkspacesController {
   setPermissions(
     @CurrentMembership() member: MembershipContext,
     @CurrentPermissions() caller: ReadonlySet<string>,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
     @Body() dto: PermissionCodesDto,
   ) {
     return this.workspaces.setPermissions(member, caller, id, dto.permissions);
@@ -216,7 +217,7 @@ export class WorkspacesController {
   applyTemplate(
     @CurrentMembership() member: MembershipContext,
     @CurrentPermissions() caller: ReadonlySet<string>,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
     @Body() dto: ApplyTemplateDto,
   ) {
     return this.workspaces.applyTemplate(member, caller, id, dto.template_id);
@@ -229,7 +230,7 @@ export class WorkspacesController {
   @ApiConflictResponse(lastAdmin)
   remove(
     @CurrentMembership() member: MembershipContext,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
   ) {
     return this.workspaces.remove(member, id);
   }

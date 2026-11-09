@@ -34,6 +34,7 @@ import { ClientDto, ClientPageDto } from './dto/client.dto.js';
 import { CreateClientDto } from './dto/create-client.dto.js';
 import { ListClientsQueryDto } from './dto/list-clients-query.dto.js';
 import { UpdateClientDto } from './dto/update-client.dto.js';
+import { ParseIdPipe } from '../../common/validators/parse-id.pipe.js';
 
 const duplicatePhone = {
   type: ErrorResponseDto,
@@ -65,7 +66,7 @@ export class ClientsController {
   @ApiOkResponse({ type: ClientDto })
   get(
     @CurrentWorkspace() workspace: WorkspaceContext,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
   ) {
     return this.clients.get(workspace, id);
   }
@@ -89,7 +90,7 @@ export class ClientsController {
   update(
     @CurrentMembership() member: MembershipContext,
     @CurrentWorkspace() workspace: WorkspaceContext,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
     @Body() dto: UpdateClientDto,
   ) {
     return this.clients.update(member, workspace, id, dto);
@@ -103,7 +104,7 @@ export class ClientsController {
   remove(
     @CurrentMembership() member: MembershipContext,
     @CurrentWorkspace() workspace: WorkspaceContext,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
   ) {
     return this.clients.remove(member, workspace, id);
   }

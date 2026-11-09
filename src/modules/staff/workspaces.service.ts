@@ -163,7 +163,7 @@ export class WorkspacesService {
         });
       }
       await tx.workspace.update({
-        where: { id },
+        where: { id, clinic_id: actor.clinic_id },
         data: { is_active: dto.is_active, is_admin: dto.is_admin },
       });
       await audit(tx, actor, {
@@ -188,7 +188,9 @@ export class WorkspacesService {
         });
       }
       await tx.workspacePermission.deleteMany({ where: { workspace_id: id } });
-      await tx.workspace.delete({ where: { id } });
+      await tx.workspace.delete({
+        where: { id, clinic_id: actor.clinic_id },
+      });
       await audit(tx, actor, {
         action: 'workspace.deleted',
         resource_type: 'workspace',

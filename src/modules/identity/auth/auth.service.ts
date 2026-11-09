@@ -14,6 +14,7 @@ import {
   REFRESH_TOKEN_TTL_MS,
   sha256,
 } from '../../../common/auth/tokens.js';
+import { fieldError } from '../../../common/http/errors.js';
 import { describeWorkspaces } from '../../../common/workspace/describe.js';
 import { PrismaService } from '../../../core/prisma/prisma.service.js';
 import type { MeClinicDto, MeDto, TokensDto } from './dto/auth-response.dto.js';
@@ -222,7 +223,8 @@ export class AuthService {
       throw new UnauthorizedException('The current password is wrong');
     }
     if (dto.current_password === dto.new_password) {
-      throw new ForbiddenException(
+      throw fieldError(
+        'new_password',
         'Choose a password different from the current one',
       );
     }

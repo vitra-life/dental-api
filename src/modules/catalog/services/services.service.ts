@@ -3,6 +3,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { audit } from '../../../common/audit/audit.js';
+import type { MembershipContext } from '../../../common/auth/auth-request.js';
 import { PrismaService } from '../../../core/prisma/prisma.service.js';
 import { CreateServiceDto } from './dto/create-service.dto.js';
 import { ListServicesQueryDto } from './dto/list-services-query.dto.js';
@@ -46,9 +48,10 @@ export class ServicesService {
     });
   }
 
-  /** Deletes a service that no appointment uses; with appointments it must be deactivated instead. */
-  async remove(clinicId: string, id: string) {
-    await this.get(clinicId, id);
+  /** Deletes a service that no appointment uses; with appointments it must be deactivated instead. Recorded in the audit log. */
+  async remove(member: MembershipContext, id: string) {
+    const clinicId = member.clinic_id;
+    const service = await this.get(clinicId, id);
     const used = await this.prisma.appointment.count({
       where: { clinic_id: clinicId, service_id: id },
     });
@@ -57,6 +60,14 @@ export class ServicesService {
         'The service has appointments and cannot be deleted; deactivate it instead',
       );
     }
-    await this.prisma.service.delete({ where: { id, clinic_id: clinicId } });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.service.delete({ where: { id, clinic_id: clinicId } });
+      await audit(tx, member, {
+        action: 'service.deleted',
+        resource_type: 'service',
+        resource_id: id,
+        details: { name: service.name },
+      });
+    });
   }
 }

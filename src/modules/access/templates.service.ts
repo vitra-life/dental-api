@@ -59,7 +59,7 @@ export class TemplatesService {
     const template = await this.find(member.clinic_id, id);
     await this.prisma.$transaction(async (tx) => {
       await tx.permissionTemplate.update({
-        where: { id },
+        where: { id, clinic_id: member.clinic_id },
         data: { name: dto.name },
       });
       await audit(tx, member, {
@@ -81,7 +81,9 @@ export class TemplatesService {
       await tx.permissionTemplateItem.deleteMany({
         where: { template_id: id },
       });
-      await tx.permissionTemplate.delete({ where: { id } });
+      await tx.permissionTemplate.delete({
+        where: { id, clinic_id: member.clinic_id },
+      });
       await audit(tx, member, {
         action: 'template.deleted',
         resource_type: 'permission_template',

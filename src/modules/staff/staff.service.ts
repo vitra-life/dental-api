@@ -222,7 +222,7 @@ export class StaffService {
       }
       if (dto.is_active !== undefined) {
         await tx.clinicMembership.update({
-          where: { id: membershipId },
+          where: { id: membershipId, clinic_id: actor.clinic_id },
           data: { is_active: dto.is_active },
         });
       }
