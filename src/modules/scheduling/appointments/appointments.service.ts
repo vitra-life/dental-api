@@ -19,6 +19,7 @@ import {
 import { P } from '../../../common/auth/permission-catalog.js';
 import { forbidden } from '../../../common/auth/permission.guard.js';
 import { isActiveDoctor, memberNames } from '../../../common/staff/doctors.js';
+import { lockMembership } from '../../../core/prisma/locks.js';
 import { PrismaService } from '../../../core/prisma/prisma.service.js';
 import {
   APPOINTMENT_DURATIONS,
@@ -35,6 +36,9 @@ const MAX_RANGE_DAYS = 366;
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 const LONGEST = Math.max(...APPOINTMENT_DURATIONS);
+
+/** Prisma or a transaction client. */
+type Db = PrismaService | Prisma.TransactionClient;
 
 /** The permission each target status needs on `PATCH /:id/status`. */
 const STATUS_PERMISSION: Partial<Record<AppointmentStatus, string>> = {
@@ -112,25 +116,31 @@ export class AppointmentsService {
     const start = new Date(dto.start_time);
     const duration =
       dto.duration_minutes ?? defaultDuration(service.duration_minutes);
-    await this.assertFree(
-      member.clinic_id,
-      dto.doctor_membership_id,
-      start,
-      duration,
-    );
 
-    const created = await this.prisma.appointment.create({
-      data: {
-        clinic_id: member.clinic_id,
-        client_id: dto.client_id,
-        service_id: service.id,
-        doctor_membership_id: dto.doctor_membership_id,
-        created_by_membership_id: member.id,
-        created_by_workspace_id: workspace.id,
-        start_time: start,
-        duration_minutes: duration,
-        description: dto.description ?? null,
-      },
+    // Checked and written under the doctor's lock, so two bookings made at
+    // the same moment can't both take the time.
+    const created = await this.prisma.$transaction(async (tx) => {
+      await lockMembership(tx, dto.doctor_membership_id);
+      await this.assertFree(
+        tx,
+        member.clinic_id,
+        dto.doctor_membership_id,
+        start,
+        duration,
+      );
+      return tx.appointment.create({
+        data: {
+          clinic_id: member.clinic_id,
+          client_id: dto.client_id,
+          service_id: service.id,
+          doctor_membership_id: dto.doctor_membership_id,
+          created_by_membership_id: member.id,
+          created_by_workspace_id: workspace.id,
+          start_time: start,
+          duration_minutes: duration,
+          description: dto.description ?? null,
+        },
+      });
     });
     return this.load(member.clinic_id, created.id);
   }
@@ -164,23 +174,34 @@ export class AppointmentsService {
       ? new Date(dto.start_time)
       : current.start_time;
     const duration = dto.duration_minutes ?? current.duration_minutes;
-    if (
+    const moves = Boolean(
       doctor &&
-      (dto.start_time || dto.duration_minutes || dto.doctor_membership_id)
-    ) {
-      await this.assertFree(member.clinic_id, doctor, start, duration, id);
-    }
+      (dto.start_time || dto.duration_minutes || dto.doctor_membership_id),
+    );
 
-    await this.prisma.appointment.update({
-      where: { id, clinic_id: member.clinic_id },
-      data: {
-        client_id: dto.client_id,
-        service_id: dto.service_id,
-        doctor_membership_id: dto.doctor_membership_id,
-        start_time: dto.start_time ? start : undefined,
-        duration_minutes: dto.duration_minutes,
-        description: dto.description,
-      },
+    await this.prisma.$transaction(async (tx) => {
+      if (moves && doctor) {
+        await lockMembership(tx, doctor);
+        await this.assertFree(
+          tx,
+          member.clinic_id,
+          doctor,
+          start,
+          duration,
+          id,
+        );
+      }
+      await tx.appointment.update({
+        where: { id, clinic_id: member.clinic_id },
+        data: {
+          client_id: dto.client_id,
+          service_id: dto.service_id,
+          doctor_membership_id: dto.doctor_membership_id,
+          start_time: dto.start_time ? start : undefined,
+          duration_minutes: dto.duration_minutes,
+          description: dto.description,
+        },
+      });
     });
     return this.load(member.clinic_id, id);
   }
@@ -189,7 +210,7 @@ export class AppointmentsService {
    * Confirm, complete or mark a no-show; each needs its own permission
    * (`appointment.confirm`, `.complete`, `.no_show`). Cancelling is `cancel()`.
    */
-  changeStatus(
+  async changeStatus(
     member: MembershipContext,
     workspace: WorkspaceContext,
     permissions: ReadonlySet<string>,
@@ -200,7 +221,9 @@ export class AppointmentsService {
     if (!needed)
       throw fieldError('status', 'Use the cancel endpoint to cancel');
     if (!permissions.has(needed)) throw forbidden(needed);
-    return this.setStatus(member, workspace, id, status);
+    const current = await this.visible(workspace, id);
+    await this.setStatus(this.prisma, member.clinic_id, current, status);
+    return this.load(member.clinic_id, id);
   }
 
   async cancel(
@@ -208,13 +231,18 @@ export class AppointmentsService {
     workspace: WorkspaceContext,
     id: string,
   ) {
-    const result = await this.setStatus(member, workspace, id, 'cancelled');
-    await audit(this.prisma, member, {
-      action: 'appointment.cancelled',
-      resource_type: 'appointment',
-      resource_id: id,
+    const current = await this.visible(workspace, id);
+    await this.prisma.$transaction(async (tx) => {
+      // Only a real change is recorded; cancelling twice is a no-op.
+      if (await this.setStatus(tx, member.clinic_id, current, 'cancelled')) {
+        await audit(tx, member, {
+          action: 'appointment.cancelled',
+          resource_type: 'appointment',
+          resource_id: id,
+        });
+      }
     });
-    return result;
+    return this.load(member.clinic_id, id);
   }
 
   /** Hides the appointment everywhere (soft delete); it no longer blocks the doctor's time. */
@@ -224,42 +252,43 @@ export class AppointmentsService {
     id: string,
   ): Promise<void> {
     await this.visible(workspace, id);
-    await this.prisma.appointment.update({
-      where: { id, clinic_id: member.clinic_id },
-      data: { deleted_at: new Date() },
-    });
-    await audit(this.prisma, member, {
-      action: 'appointment.deleted',
-      resource_type: 'appointment',
-      resource_id: id,
+    await this.prisma.$transaction(async (tx) => {
+      await tx.appointment.update({
+        where: { id, clinic_id: member.clinic_id },
+        data: { deleted_at: new Date() },
+      });
+      await audit(tx, member, {
+        action: 'appointment.deleted',
+        resource_type: 'appointment',
+        resource_id: id,
+      });
     });
   }
 
+  /** Moves `current` to `status`; false if it already had it. */
   private async setStatus(
-    member: MembershipContext,
-    workspace: WorkspaceContext,
-    id: string,
+    db: Db,
+    clinicId: string,
+    current: Appointment,
     status: AppointmentStatus,
-  ) {
-    const current = await this.visible(workspace, id);
-    if (current.status !== status) {
-      if (!canChangeStatus(current.status, status)) {
-        throw new ConflictException(
-          `A ${current.status} appointment cannot become ${status}`,
-        );
-      }
-      // Only if nobody changed the status in the meantime.
-      const { count } = await this.prisma.appointment.updateMany({
-        where: { id, clinic_id: member.clinic_id, status: current.status },
-        data: { status },
-      });
-      if (count === 0) {
-        throw new ConflictException(
-          'The appointment was changed by someone else; reload and try again',
-        );
-      }
+  ): Promise<boolean> {
+    if (current.status === status) return false;
+    if (!canChangeStatus(current.status, status)) {
+      throw new ConflictException(
+        `A ${current.status} appointment cannot become ${status}`,
+      );
     }
-    return this.load(member.clinic_id, id);
+    // Only if nobody changed the status in the meantime.
+    const { count } = await db.appointment.updateMany({
+      where: { id: current.id, clinic_id: clinicId, status: current.status },
+      data: { status },
+    });
+    if (count === 0) {
+      throw new ConflictException(
+        'The appointment was changed by someone else; reload and try again',
+      );
+    }
+    return true;
   }
 
   /** The appointment, if the workspace sees it; otherwise 404. */
@@ -365,15 +394,19 @@ export class AppointmentsService {
     }
   }
 
-  /** A doctor cannot have two pending or confirmed appointments at the same time. */
+  /**
+   * A doctor cannot have two pending or confirmed appointments at the same
+   * time. Call under `lockMembership(doctorId)` in the same transaction.
+   */
   private async assertFree(
+    db: Db,
     clinicId: string,
     doctorId: string,
     start: Date,
     minutes: number,
     exceptId?: string,
   ) {
-    const candidates = await this.prisma.appointment.findMany({
+    const candidates = await db.appointment.findMany({
       where: {
         clinic_id: clinicId,
         doctor_membership_id: doctorId,

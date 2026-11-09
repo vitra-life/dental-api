@@ -63,17 +63,21 @@ export class AuthService {
       });
     }
     if (!(await verifyPassword(user.password_hash, dto.password))) {
-      const attempts = user.failed_login_attempts + 1;
-      const lock = attempts >= MAX_FAILED_LOGINS;
-      await this.prisma.user.update({
+      // Counted in the database, so wrong guesses sent in parallel all count.
+      const { failed_login_attempts } = await this.prisma.user.update({
         where: { id: user.id },
-        data: {
-          failed_login_attempts: lock ? 0 : attempts,
-          locked_until: lock
-            ? new Date(Date.now() + LOCK_MINUTES * 60_000)
-            : user.locked_until,
-        },
+        data: { failed_login_attempts: { increment: 1 } },
+        select: { failed_login_attempts: true },
       });
+      if (failed_login_attempts >= MAX_FAILED_LOGINS) {
+        await this.prisma.user.update({
+          where: { id: user.id },
+          data: {
+            failed_login_attempts: 0,
+            locked_until: new Date(Date.now() + LOCK_MINUTES * 60_000),
+          },
+        });
+      }
       throw new UnauthorizedException(INVALID_LOGIN);
     }
     if (!user.is_active) throw new UnauthorizedException(INVALID_LOGIN);
@@ -143,15 +147,20 @@ export class AuthService {
     if (!user?.is_active)
       throw new UnauthorizedException('The account is not active');
 
+    // Only if the token is still the current one: of two refreshes sent with
+    // the same token at once, one wins and the other is refused.
     const next = newRefreshToken();
-    await this.prisma.authSession.update({
-      where: { id: session.id },
+    const { count } = await this.prisma.authSession.updateMany({
+      where: { id: session.id, refresh_token_hash: hash, revoked_at: null },
       data: {
         refresh_token_hash: sha256(next),
         previous_token_hash: hash,
         last_used_at: new Date(),
       },
     });
+    if (count === 0) {
+      throw new UnauthorizedException('The session has ended; sign in again');
+    }
     const auth = {
       user_id: session.user_id,
       session_id: session.id,
@@ -217,20 +226,20 @@ export class AuthService {
         'Choose a password different from the current one',
       );
     }
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        password_hash: await hashPassword(dto.new_password),
-        must_change_password: false,
-      },
-    });
-    await this.prisma.authSession.updateMany({
-      where: {
-        user_id: user.id,
-        id: { not: auth.session_id },
-        revoked_at: null,
-      },
-      data: { revoked_at: new Date() },
+    const passwordHash = await hashPassword(dto.new_password);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: { password_hash: passwordHash, must_change_password: false },
+      });
+      await tx.authSession.updateMany({
+        where: {
+          user_id: user.id,
+          id: { not: auth.session_id },
+          revoked_at: null,
+        },
+        data: { revoked_at: new Date() },
+      });
     });
   }
 

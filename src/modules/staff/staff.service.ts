@@ -214,13 +214,12 @@ export class StaffService {
     const staffTypeIds = dto.staff_types
       ? await this.staffTypeIds(dto.staff_types)
       : undefined;
-    if (current.is_active && dto.is_active === false) {
-      await this.workspaces.assertAdminRemains(actor.clinic_id, {
-        membershipId,
-      });
-    }
-
     await this.prisma.$transaction(async (tx) => {
+      if (current.is_active && dto.is_active === false) {
+        await this.workspaces.assertAdminRemains(tx, actor.clinic_id, {
+          membershipId,
+        });
+      }
       if (dto.is_active !== undefined) {
         await tx.clinicMembership.update({
           where: { id: membershipId },
@@ -284,16 +283,18 @@ export class StaffService {
       specialty: dto.specialty ?? null,
       license_verified: dto.license_verified ?? false,
     };
-    await this.prisma.doctorProfile.upsert({
-      where: { user_id: membership.user_id },
-      create: { user_id: membership.user_id, ...values },
-      update: values,
-    });
-    await audit(this.prisma, actor, {
-      action: 'doctor_profile.updated',
-      resource_type: 'membership',
-      resource_id: membershipId,
-      details: values,
+    await this.prisma.$transaction(async (tx) => {
+      await tx.doctorProfile.upsert({
+        where: { user_id: membership.user_id },
+        create: { user_id: membership.user_id, ...values },
+        update: values,
+      });
+      await audit(tx, actor, {
+        action: 'doctor_profile.updated',
+        resource_type: 'membership',
+        resource_id: membershipId,
+        details: values,
+      });
     });
     return this.get(actor.clinic_id, membershipId);
   }
