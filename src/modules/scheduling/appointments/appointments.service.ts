@@ -17,8 +17,13 @@ import {
   canBookFor,
 } from '../../../common/auth/access-scope.js';
 import { P } from '../../../common/auth/permission-catalog.js';
-import { forbidden } from '../../../common/auth/permission.guard.js';
+import {
+  conflict,
+  fieldError,
+  forbidden,
+} from '../../../common/http/errors.js';
 import { isActiveDoctor, memberNames } from '../../../common/staff/doctors.js';
+import type { Db } from '../../../core/prisma/db.js';
 import { lockMembership } from '../../../core/prisma/locks.js';
 import { PrismaService } from '../../../core/prisma/prisma.service.js';
 import {
@@ -37,23 +42,12 @@ const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 const LONGEST = Math.max(...APPOINTMENT_DURATIONS);
 
-/** Prisma or a transaction client. */
-type Db = PrismaService | Prisma.TransactionClient;
-
 /** The permission each target status needs on `PATCH /:id/status`. */
 const STATUS_PERMISSION: Partial<Record<AppointmentStatus, string>> = {
   confirmed: P.appointmentConfirm,
   completed: P.appointmentComplete,
   no_show: P.appointmentNoShow,
 };
-
-/** A 400 in the same shape as a validation error, for one field. */
-function fieldError(field: string, error: string) {
-  return new BadRequestException({
-    message: 'Validation failed',
-    details: [{ field, errors: [error] }],
-  });
-}
 
 @Injectable()
 export class AppointmentsService {
@@ -424,10 +418,11 @@ export class AppointmentsService {
       overlaps(start, minutes, c.start_time, c.duration_minutes),
     );
     if (clash) {
-      throw new ConflictException({
-        message: 'The doctor already has an appointment at this time',
-        details: { reason: 'overlap', appointment_id: clash.id },
-      });
+      throw conflict(
+        'overlap',
+        'The doctor already has an appointment at this time',
+        { appointment_id: clash.id },
+      );
     }
   }
 }

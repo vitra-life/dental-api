@@ -30,7 +30,7 @@ The server listens on `PORT` (default 3000):
 | `/api/docs` | Swagger UI, when `SWAGGER_ENABLED=true` |
 | `/api/v1/...` | The API |
 
-The app refuses to start if an environment variable is missing or malformed (`src/config/env.ts`) or if the database cannot be reached.
+The app refuses to start if an environment variable is missing or malformed (`src/core/config/env.ts`) or if the database cannot be reached.
 
 ## Commands
 

@@ -2,7 +2,11 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import type { PermissionTemplate } from '../../generated/prisma/client.js';
 import { audit } from '../../common/audit/audit.js';
 import type { MembershipContext } from '../../common/auth/auth-request.js';
-import { codesOf, grantablePermissionIds } from '../../common/auth/grants.js';
+import {
+  codesOf,
+  grantablePermissionIds,
+  orderedCodes,
+} from '../../common/auth/grants.js';
 import { PrismaService } from '../../core/prisma/prisma.service.js';
 import type {
   CreatePermissionTemplateDto,
@@ -157,18 +161,14 @@ export class TemplatesService {
       this.prisma,
       items.map((i) => i.permission_id),
     );
-    const order = [...code.keys()];
     return templates.map((t) => ({
       id: t.id,
       code: t.code,
       name: t.name,
-      permissions: items
-        .filter((i) => i.template_id === t.id && code.has(i.permission_id))
-        .sort(
-          (a, b) =>
-            order.indexOf(a.permission_id) - order.indexOf(b.permission_id),
-        )
-        .map((i) => code.get(i.permission_id)!),
+      permissions: orderedCodes(
+        items.filter((i) => i.template_id === t.id).map((i) => i.permission_id),
+        code,
+      ),
     }));
   }
 }

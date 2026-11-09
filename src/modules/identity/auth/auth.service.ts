@@ -15,6 +15,7 @@ import {
   sha256,
 } from '../../../common/auth/tokens.js';
 import { fieldError } from '../../../common/http/errors.js';
+import { staffTypesOf } from '../../../common/staff/staff-types.js';
 import { describeWorkspaces } from '../../../common/workspace/describe.js';
 import { PrismaService } from '../../../core/prisma/prisma.service.js';
 import type { MeClinicDto, MeDto, TokensDto } from './dto/auth-response.dto.js';
@@ -311,28 +312,20 @@ export class AuthService {
     const clinicName = new Map(clinics.map((c) => [c.id, c.name]));
     const usable = memberships.filter((m) => clinicName.has(m.clinic_id));
     const ids = usable.map((m) => m.id);
-    const [workspaces, typeLinks] = await Promise.all([
+    const [workspaces, typesOf] = await Promise.all([
       this.prisma.workspace.findMany({
         where: { membership_id: { in: ids }, is_active: true },
         orderBy: [{ is_admin: 'desc' }, { created_at: 'asc' }],
       }),
-      this.prisma.membershipStaffType.findMany({
-        where: { membership_id: { in: ids } },
-      }),
+      staffTypesOf(this.prisma, ids),
     ]);
-    const types = await this.prisma.staffType.findMany({
-      where: { id: { in: typeLinks.map((l) => l.staff_type_id) } },
-    });
-    const typeById = new Map(types.map((t) => [t.id, t.code]));
     const described = await describeWorkspaces(this.prisma, workspaces);
     return usable
       .map((m) => ({
         clinic_id: m.clinic_id,
         clinic_name: clinicName.get(m.clinic_id)!,
         membership_id: m.id,
-        staff_types: typeLinks
-          .filter((l) => l.membership_id === m.id)
-          .flatMap((l) => typeById.get(l.staff_type_id) ?? []),
+        staff_types: typesOf.get(m.id) ?? [],
         workspaces: described
           .filter(
             (w) => w.membership_id === m.id && w.clinic_id === m.clinic_id,

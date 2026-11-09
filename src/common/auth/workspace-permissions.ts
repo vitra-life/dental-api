@@ -1,5 +1,5 @@
-import type { PrismaService } from '../../core/prisma/prisma.service.js';
 import { CATALOG_CODES } from './permission-catalog.js';
+import type { Db } from '../../core/prisma/db.js';
 
 /**
  * A workspace's permission codes. An admin workspace holds every catalogue
@@ -7,7 +7,7 @@ import { CATALOG_CODES } from './permission-catalog.js';
  * applies on the next one. Items removed from the catalogue are ignored.
  */
 export async function workspacePermissions(
-  prisma: Pick<PrismaService, 'workspacePermission' | 'permission'>,
+  prisma: Db,
   workspace: { id: string; is_admin: boolean },
 ): Promise<Set<string>> {
   if (workspace.is_admin) return new Set(CATALOG_CODES);

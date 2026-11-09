@@ -2,8 +2,8 @@ import type {
   Workspace,
   WorkspaceKind,
 } from '../../generated/prisma/client.js';
-import type { PrismaService } from '../../core/prisma/prisma.service.js';
 import { memberNames } from '../staff/doctors.js';
+import type { Db } from '../../core/prisma/db.js';
 
 /** A workspace with the names the screens show. */
 export interface WorkspaceSummary {
@@ -23,7 +23,7 @@ export interface WorkspaceSummary {
 
 /** Adds doctor and relationship names to workspace rows, with two queries for all of them. */
 export async function describeWorkspaces(
-  prisma: Pick<PrismaService, 'relationshipType' | 'clinicMembership' | 'user'>,
+  prisma: Db,
   workspaces: Workspace[],
 ): Promise<WorkspaceSummary[]> {
   if (workspaces.length === 0) return [];

@@ -1,11 +1,7 @@
-import {
-  CanActivate,
-  ExecutionContext,
-  ForbiddenException,
-  Injectable,
-} from '@nestjs/common';
+import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../../core/prisma/prisma.service.js';
+import { forbidden } from '../http/errors.js';
 import type { AuthRequest } from './auth-request.js';
 import { REQUIRED_PERMISSION } from './decorators.js';
 import { workspacePermissions } from './workspace-permissions.js';
@@ -42,10 +38,3 @@ export class PermissionGuard implements CanActivate {
     return true;
   }
 }
-
-/** The 403 for a missing permission, also thrown by handlers that check one themselves. */
-export const forbidden = (code: string) =>
-  new ForbiddenException({
-    message: 'You do not have permission for this',
-    details: { permission: code },
-  });

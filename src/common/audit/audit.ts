@@ -1,11 +1,9 @@
 import type { Prisma } from '../../generated/prisma/client.js';
 import type { MembershipContext } from '../auth/auth-request.js';
-
-/** Anything that can write rows: the Prisma service or a transaction client. */
-type Writer = Pick<Prisma.TransactionClient, 'auditLog'>;
+import type { Db } from '../../core/prisma/db.js';
 
 export interface AuditEntry {
-  /** e.g. role.created, permission.assigned, appointment.cancelled */
+  /** e.g. workspace.permissions_set, client.deleted, appointment.cancelled */
   action: string;
   resource_type: string;
   resource_id?: string | null;
@@ -14,7 +12,7 @@ export interface AuditEntry {
 
 /** Records a sensitive change made by `actor` in its clinic. */
 export async function audit(
-  prisma: Writer,
+  prisma: Db,
   actor: MembershipContext,
   entry: AuditEntry,
 ): Promise<void> {

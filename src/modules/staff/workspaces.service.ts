@@ -1,6 +1,4 @@
 import {
-  BadRequestException,
-  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -11,10 +9,16 @@ import type {
   MembershipContext,
   WorkspaceContext,
 } from '../../common/auth/auth-request.js';
-import { codesOf, grantablePermissionIds } from '../../common/auth/grants.js';
+import {
+  codesOf,
+  grantablePermissionIds,
+  orderedCodes,
+} from '../../common/auth/grants.js';
 import { CATALOG_CODES } from '../../common/auth/permission-catalog.js';
 import { isActiveDoctor, memberNames } from '../../common/staff/doctors.js';
 import { describeWorkspaces } from '../../common/workspace/describe.js';
+import { conflict, fieldError } from '../../common/http/errors.js';
+import type { Db } from '../../core/prisma/db.js';
 import { lockClinic } from '../../core/prisma/locks.js';
 import { PrismaService } from '../../core/prisma/prisma.service.js';
 import { TemplatesService } from '../access/templates.service.js';
@@ -25,22 +29,11 @@ import type {
   WorkspaceDto,
 } from './dto/staff.dto.js';
 
-/** Prisma or a transaction client. */
-type Db = PrismaService | Prisma.TransactionClient;
-
-/** A 400 in the same shape as a validation error, for one field. */
-export function fieldError(field: string, error: string) {
-  return new BadRequestException({
-    message: 'Validation failed',
-    details: [{ field, errors: [error] }],
-  });
-}
-
 const LAST_ADMIN = () =>
-  new ConflictException({
-    message: 'The clinic needs at least one active admin workspace',
-    details: { reason: 'last_admin' },
-  });
+  conflict(
+    'last_admin',
+    'The clinic needs at least one active admin workspace',
+  );
 
 /**
  * Workspaces: one person's positions in the clinic. Each starts with no
@@ -216,10 +209,10 @@ export class WorkspacesService {
   ): Promise<WorkspaceDto> {
     const workspace = await this.find(actor.clinic_id, id);
     if (workspace.is_admin)
-      throw new ConflictException({
-        message: 'An admin workspace already holds every permission',
-        details: { reason: 'admin_workspace' },
-      });
+      throw conflict(
+        'admin_workspace',
+        'An admin workspace already holds every permission',
+      );
     const idOf = await grantablePermissionIds(this.prisma, caller, codes);
     await this.prisma.$transaction(async (tx) => {
       await tx.workspacePermission.deleteMany({ where: { workspace_id: id } });
@@ -253,30 +246,6 @@ export class WorkspacesService {
     return this.setPermissions(actor, caller, id, [
       ...new Set([...current.permissions, ...codes]),
     ]);
-  }
-
-  /** The doctor's own practice workspace, created if missing. */
-  async ensureDoctorWorkspace(
-    db: Db,
-    clinicId: string,
-    membershipId: string,
-  ): Promise<void> {
-    const existing = await db.workspace.findFirst({
-      where: {
-        clinic_id: clinicId,
-        membership_id: membershipId,
-        kind: 'doctor',
-      },
-    });
-    if (existing) return;
-    await db.workspace.create({
-      data: {
-        clinic_id: clinicId,
-        membership_id: membershipId,
-        kind: 'doctor',
-        doctor_membership_id: membershipId,
-      },
-    });
   }
 
   /**
@@ -414,25 +383,20 @@ export class WorkspacesService {
       this.prisma,
       grants.map((g) => g.permission_id),
     );
-    const order = [...code.keys()];
     return summaries.map((w) => ({
       ...w,
       member_name: names.get(w.membership_id) ?? '',
       permissions: w.is_admin
         ? [...CATALOG_CODES]
-        : grants
-            .filter((g) => g.workspace_id === w.id && code.has(g.permission_id))
-            .sort(
-              (a, b) =>
-                order.indexOf(a.permission_id) - order.indexOf(b.permission_id),
-            )
-            .map((g) => code.get(g.permission_id)!),
+        : orderedCodes(
+            grants
+              .filter((g) => g.workspace_id === w.id)
+              .map((g) => g.permission_id),
+            code,
+          ),
     }));
   }
 }
 
 const duplicateWorkspace = () =>
-  new ConflictException({
-    message: 'This person already holds this position',
-    details: { reason: 'duplicate_workspace' },
-  });
+  conflict('duplicate_workspace', 'This person already holds this position');

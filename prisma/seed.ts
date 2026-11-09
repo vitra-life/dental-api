@@ -1,7 +1,7 @@
 /**
  * `npm run db:seed`:
  * - reference data every installation needs (staff types, relationship types,
- *   the permission catalogue, system roles and their grants). Idempotent and
+ *   and the permission catalogue). Idempotent and
  *   safe in production; run it after every deploy that changes the catalogue;
  * - outside production only, the dev clinic (fixed id, for local work).
  *
