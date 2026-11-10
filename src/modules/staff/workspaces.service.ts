@@ -15,6 +15,7 @@ import { codesOf, grantablePermissionIds } from '../../common/auth/grants.js';
 import { CATALOG_CODES } from '../../common/auth/permission-catalog.js';
 import { isActiveDoctor, memberNames } from '../../common/staff/doctors.js';
 import { describeWorkspaces } from '../../common/workspace/describe.js';
+import { lockClinic } from '../../core/prisma/locks.js';
 import { PrismaService } from '../../core/prisma/prisma.service.js';
 import { TemplatesService } from '../access/templates.service.js';
 import type {
@@ -155,20 +156,24 @@ export class WorkspacesService {
     const staysAdmin =
       (dto.is_admin ?? workspace.is_admin) &&
       (dto.is_active ?? workspace.is_active);
-    if (workspace.is_admin && workspace.is_active && !staysAdmin) {
-      await this.assertAdminRemains(actor.clinic_id, { workspaceId: id });
-    }
-    await this.prisma.workspace.update({
-      where: { id },
-      data: { is_active: dto.is_active, is_admin: dto.is_admin },
-    });
-    await audit(this.prisma, actor, {
-      action: 'workspace.updated',
-      resource_type: 'workspace',
-      resource_id: id,
-      // The DTO is plain data; losing its prototype is intended.
-      // oxlint-disable-next-line typescript/no-misused-spread
-      details: { ...dto },
+    await this.prisma.$transaction(async (tx) => {
+      if (workspace.is_admin && workspace.is_active && !staysAdmin) {
+        await this.assertAdminRemains(tx, actor.clinic_id, {
+          workspaceId: id,
+        });
+      }
+      await tx.workspace.update({
+        where: { id, clinic_id: actor.clinic_id },
+        data: { is_active: dto.is_active, is_admin: dto.is_admin },
+      });
+      await audit(tx, actor, {
+        action: 'workspace.updated',
+        resource_type: 'workspace',
+        resource_id: id,
+        // The DTO is plain data; losing its prototype is intended.
+        // oxlint-disable-next-line typescript/no-misused-spread
+        details: { ...dto },
+      });
     });
     return this.get(actor.clinic_id, id);
   }
@@ -176,12 +181,16 @@ export class WorkspacesService {
   /** Removes a position and its grants. Sessions working in it stop at once. */
   async remove(actor: MembershipContext, id: string): Promise<void> {
     const workspace = await this.find(actor.clinic_id, id);
-    if (workspace.is_admin && workspace.is_active) {
-      await this.assertAdminRemains(actor.clinic_id, { workspaceId: id });
-    }
     await this.prisma.$transaction(async (tx) => {
+      if (workspace.is_admin && workspace.is_active) {
+        await this.assertAdminRemains(tx, actor.clinic_id, {
+          workspaceId: id,
+        });
+      }
       await tx.workspacePermission.deleteMany({ where: { workspace_id: id } });
-      await tx.workspace.delete({ where: { id } });
+      await tx.workspace.delete({
+        where: { id, clinic_id: actor.clinic_id },
+      });
       await audit(tx, actor, {
         action: 'workspace.deleted',
         resource_type: 'workspace',
@@ -349,13 +358,17 @@ export class WorkspacesService {
 
   /**
    * 409 `last_admin` unless the clinic keeps another active admin workspace
-   * held by an active member, apart from `except`.
+   * held by an active member, apart from `except`. Locks the clinic, so it
+   * must be the first statement of the transaction that then removes the
+   * admin: two admins removing each other at once can't both pass.
    */
   async assertAdminRemains(
+    tx: Prisma.TransactionClient,
     clinicId: string,
     except: { workspaceId?: string; membershipId?: string },
   ): Promise<void> {
-    const admins = await this.prisma.workspace.findMany({
+    await lockClinic(tx, clinicId);
+    const admins = await tx.workspace.findMany({
       where: {
         clinic_id: clinicId,
         is_admin: true,
@@ -367,7 +380,7 @@ export class WorkspacesService {
       },
       select: { membership_id: true },
     });
-    const activeHolders = await this.prisma.clinicMembership.count({
+    const activeHolders = await tx.clinicMembership.count({
       where: {
         id: { in: admins.map((a) => a.membership_id) },
         is_active: true,

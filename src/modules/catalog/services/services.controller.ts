@@ -17,7 +17,11 @@ import {
   ApiOkResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { RequirePermission } from '../../../common/auth/decorators.js';
+import type { MembershipContext } from '../../../common/auth/auth-request.js';
+import {
+  CurrentMembership,
+  RequirePermission,
+} from '../../../common/auth/decorators.js';
 import { P } from '../../../common/auth/permission-catalog.js';
 import { ClinicId } from '../../../common/clinic/clinic-id.decorator.js';
 import { ClinicScoped } from '../../../common/clinic/clinic-scoped.decorator.js';
@@ -27,6 +31,7 @@ import { ListServicesQueryDto } from './dto/list-services-query.dto.js';
 import { ServiceDto } from './dto/service.dto.js';
 import { UpdateServiceDto } from './dto/update-service.dto.js';
 import { ServicesService } from './services.service.js';
+import { ParseIdPipe } from '../../../common/validators/parse-id.pipe.js';
 
 @ApiTags('services')
 @ClinicScoped()
@@ -45,7 +50,7 @@ export class ServicesController {
   @Get(':id')
   @RequirePermission(P.serviceView, P.appointmentView, P.appointmentCreate)
   @ApiOkResponse({ type: ServiceDto })
-  get(@ClinicId() clinicId: string, @Param('id') id: string) {
+  get(@ClinicId() clinicId: string, @Param('id', ParseIdPipe) id: string) {
     return this.services.get(clinicId, id);
   }
 
@@ -69,7 +74,7 @@ export class ServicesController {
   })
   update(
     @ClinicId() clinicId: string,
-    @Param('id') id: string,
+    @Param('id', ParseIdPipe) id: string,
     @Body() dto: UpdateServiceDto,
   ) {
     return this.services.update(clinicId, id, dto);
@@ -83,7 +88,10 @@ export class ServicesController {
     type: ErrorResponseDto,
     description: 'The service has appointments; deactivate it instead',
   })
-  remove(@ClinicId() clinicId: string, @Param('id') id: string) {
-    return this.services.remove(clinicId, id);
+  remove(
+    @CurrentMembership() member: MembershipContext,
+    @Param('id', ParseIdPipe) id: string,
+  ) {
+    return this.services.remove(member, id);
   }
 }

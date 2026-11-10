@@ -16,6 +16,7 @@ import {
   parseDateOnly,
 } from '../../common/validators/dates.js';
 import { toLatinDigits } from '../../common/validators/transforms.js';
+import { lockClinic } from '../../core/prisma/locks.js';
 import { PrismaService } from '../../core/prisma/prisma.service.js';
 import { ClientDto } from './dto/client.dto.js';
 import { CreateClientDto } from './dto/create-client.dto.js';
@@ -76,17 +77,20 @@ export class ClientsService {
     workspace: WorkspaceContext,
     dto: CreateClientDto,
   ): Promise<ClientDto> {
-    await this.assertPhoneFree(member.clinic_id, dto.phone);
-    const client = await this.prisma.client.create({
-      data: {
-        // The DTO is plain data; losing its prototype is intended.
-        // oxlint-disable-next-line typescript/no-misused-spread
-        ...dto,
-        ...birthDate(dto),
-        clinic_id: member.clinic_id,
-        created_by_membership_id: member.id,
-        created_by_workspace_id: workspace.id,
-      },
+    const client = await this.prisma.$transaction(async (tx) => {
+      await lockClinic(tx, member.clinic_id);
+      await assertPhoneFree(tx, member.clinic_id, dto.phone);
+      return tx.client.create({
+        data: {
+          // The DTO is plain data; losing its prototype is intended.
+          // oxlint-disable-next-line typescript/no-misused-spread
+          ...dto,
+          ...birthDate(dto),
+          clinic_id: member.clinic_id,
+          created_by_membership_id: member.id,
+          created_by_workspace_id: workspace.id,
+        },
+      });
     });
     return toClientDto(client, 0, null);
   }
@@ -98,18 +102,23 @@ export class ClientsService {
     dto: UpdateClientDto,
   ): Promise<ClientDto> {
     await this.visible(workspace, id);
-    if (dto.phone) await this.assertPhoneFree(member.clinic_id, dto.phone, id);
-    await this.prisma.client.update({
-      where: { id, clinic_id: member.clinic_id },
-      // The DTO is plain data; losing its prototype is intended.
-      // oxlint-disable-next-line typescript/no-misused-spread
-      data: { ...dto, ...birthDate(dto) },
-    });
-    await audit(this.prisma, member, {
-      action: 'client.updated',
-      resource_type: 'client',
-      resource_id: id,
-      details: { fields: Object.keys(dto) },
+    await this.prisma.$transaction(async (tx) => {
+      if (dto.phone) {
+        await lockClinic(tx, member.clinic_id);
+        await assertPhoneFree(tx, member.clinic_id, dto.phone, id);
+      }
+      await tx.client.update({
+        where: { id, clinic_id: member.clinic_id },
+        // The DTO is plain data; losing its prototype is intended.
+        // oxlint-disable-next-line typescript/no-misused-spread
+        data: { ...dto, ...birthDate(dto) },
+      });
+      await audit(tx, member, {
+        action: 'client.updated',
+        resource_type: 'client',
+        resource_id: id,
+        details: { fields: Object.keys(dto) },
+      });
     });
     return this.get(workspace, id);
   }
@@ -159,29 +168,6 @@ export class ClientsService {
     return client;
   }
 
-  /** Phone numbers are unique among the clinic's non-deleted clients. */
-  private async assertPhoneFree(
-    clinicId: string,
-    phone: string,
-    exceptId?: string,
-  ): Promise<void> {
-    const taken = await this.prisma.client.findFirst({
-      where: {
-        clinic_id: clinicId,
-        phone,
-        deleted_at: null,
-        ...(exceptId ? { id: { not: exceptId } } : {}),
-      },
-      select: { id: true },
-    });
-    if (taken) {
-      throw new ConflictException({
-        message: 'The clinic already has a client with this phone number',
-        details: { reason: 'duplicate_phone' },
-      });
-    }
-  }
-
   /** Adds each client's appointment count and last completed visit, with two queries for all of them. */
   private async withVisits(
     clinicId: string,
@@ -221,6 +207,33 @@ export class ClientsService {
         lastVisit.get(client.id) ?? null,
       ),
     );
+  }
+}
+
+/**
+ * Phone numbers are unique among the clinic's non-deleted clients. A unique
+ * index would also count deleted ones, so this runs under `lockClinic`.
+ */
+async function assertPhoneFree(
+  db: Pick<Prisma.TransactionClient, 'client'>,
+  clinicId: string,
+  phone: string,
+  exceptId?: string,
+): Promise<void> {
+  const taken = await db.client.findFirst({
+    where: {
+      clinic_id: clinicId,
+      phone,
+      deleted_at: null,
+      ...(exceptId ? { id: { not: exceptId } } : {}),
+    },
+    select: { id: true },
+  });
+  if (taken) {
+    throw new ConflictException({
+      message: 'The clinic already has a client with this phone number',
+      details: { reason: 'duplicate_phone' },
+    });
   }
 }
 

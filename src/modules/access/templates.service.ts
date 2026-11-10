@@ -36,14 +36,17 @@ export class TemplatesService {
     member: MembershipContext,
     dto: CreatePermissionTemplateDto,
   ): Promise<PermissionTemplateDto> {
-    const template = await this.prisma.permissionTemplate.create({
-      data: { clinic_id: member.clinic_id, code: dto.code, name: dto.name },
-    });
-    await audit(this.prisma, member, {
-      action: 'template.created',
-      resource_type: 'permission_template',
-      resource_id: template.id,
-      details: { code: template.code, name: template.name },
+    const template = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.permissionTemplate.create({
+        data: { clinic_id: member.clinic_id, code: dto.code, name: dto.name },
+      });
+      await audit(tx, member, {
+        action: 'template.created',
+        resource_type: 'permission_template',
+        resource_id: created.id,
+        details: { code: created.code, name: created.name },
+      });
+      return created;
     });
     return this.get(member.clinic_id, template.id);
   }
@@ -54,32 +57,39 @@ export class TemplatesService {
     dto: UpdatePermissionTemplateDto,
   ): Promise<PermissionTemplateDto> {
     const template = await this.find(member.clinic_id, id);
-    await this.prisma.permissionTemplate.update({
-      where: { id },
-      data: { name: dto.name },
-    });
-    await audit(this.prisma, member, {
-      action: 'template.updated',
-      resource_type: 'permission_template',
-      resource_id: id,
-      details: { before: { name: template.name }, after: { name: dto.name } },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.permissionTemplate.update({
+        where: { id, clinic_id: member.clinic_id },
+        data: { name: dto.name },
+      });
+      await audit(tx, member, {
+        action: 'template.updated',
+        resource_type: 'permission_template',
+        resource_id: id,
+        details: {
+          before: { name: template.name },
+          after: { name: dto.name },
+        },
+      });
     });
     return this.get(member.clinic_id, id);
   }
 
   async remove(member: MembershipContext, id: string): Promise<void> {
     const template = await this.find(member.clinic_id, id);
-    await this.prisma.$transaction([
-      this.prisma.permissionTemplateItem.deleteMany({
+    await this.prisma.$transaction(async (tx) => {
+      await tx.permissionTemplateItem.deleteMany({
         where: { template_id: id },
-      }),
-      this.prisma.permissionTemplate.delete({ where: { id } }),
-    ]);
-    await audit(this.prisma, member, {
-      action: 'template.deleted',
-      resource_type: 'permission_template',
-      resource_id: id,
-      details: { code: template.code },
+      });
+      await tx.permissionTemplate.delete({
+        where: { id, clinic_id: member.clinic_id },
+      });
+      await audit(tx, member, {
+        action: 'template.deleted',
+        resource_type: 'permission_template',
+        resource_id: id,
+        details: { code: template.code },
+      });
     });
   }
 
@@ -92,22 +102,22 @@ export class TemplatesService {
   ): Promise<PermissionTemplateDto> {
     await this.find(member.clinic_id, id);
     const idOf = await grantablePermissionIds(this.prisma, caller, codes);
-    await this.prisma.$transaction([
-      this.prisma.permissionTemplateItem.deleteMany({
+    await this.prisma.$transaction(async (tx) => {
+      await tx.permissionTemplateItem.deleteMany({
         where: { template_id: id },
-      }),
-      this.prisma.permissionTemplateItem.createMany({
+      });
+      await tx.permissionTemplateItem.createMany({
         data: [...idOf.values()].map((permission_id) => ({
           template_id: id,
           permission_id,
         })),
-      }),
-    ]);
-    await audit(this.prisma, member, {
-      action: 'template.permissions_set',
-      resource_type: 'permission_template',
-      resource_id: id,
-      details: { permissions: [...idOf.keys()] },
+      });
+      await audit(tx, member, {
+        action: 'template.permissions_set',
+        resource_type: 'permission_template',
+        resource_id: id,
+        details: { permissions: [...idOf.keys()] },
+      });
     });
     return this.get(member.clinic_id, id);
   }

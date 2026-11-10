@@ -179,6 +179,23 @@ describe('Services (e2e)', () => {
       .expect(201);
     await api.delete(`/api/v1/services/${created.body.id}`).expect(204);
     await api.get(`/api/v1/services/${created.body.id}`).expect(404);
+
+    const entry = await app.get(PrismaService).auditLog.findFirst({
+      where: { clinic_id: clinicId, resource_id: created.body.id },
+    });
+    expect(entry).toMatchObject({
+      action: 'service.deleted',
+      resource_type: 'service',
+      actor_membership_id: adminMembershipId,
+      details: { name: 'موقت' },
+    });
+  });
+
+  it('answers 400, not 404, for a malformed id', async () => {
+    const response = await api.get('/api/v1/services/not-an-id').expect(400);
+    expect(response.body.details).toEqual([
+      { field: 'id', errors: ['id must be a UUID'] },
+    ]);
   });
 
   it('refuses to delete a service that has appointments', async () => {
