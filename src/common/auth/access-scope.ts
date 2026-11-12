@@ -1,6 +1,6 @@
 import type { Prisma } from '../../generated/prisma/client.js';
-import type { PrismaService } from '../../core/prisma/prisma.service.js';
 import type { WorkspaceContext } from './auth-request.js';
+import type { Db } from '../../core/prisma/db.js';
 
 /**
  * Whose data a workspace sees, in one place:
@@ -26,7 +26,7 @@ export function appointmentScopeWhere(
 
 /** A `where` for the clients a workspace sees. */
 export async function clientScopeWhere(
-  prisma: Pick<PrismaService, 'appointment'>,
+  prisma: Db,
   workspace: WorkspaceContext,
 ): Promise<Prisma.ClientWhereInput> {
   const base = { clinic_id: workspace.clinic_id, deleted_at: null };

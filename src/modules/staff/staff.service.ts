@@ -18,6 +18,9 @@ import {
   DOCTOR_STAFF_TYPE,
   doctorMembershipIds,
 } from '../../common/staff/doctors.js';
+import { conflict, fieldError } from '../../common/http/errors.js';
+import { staffTypesOf } from '../../common/staff/staff-types.js';
+import { ensureDoctorWorkspace } from '../../common/workspace/positions.js';
 import { PrismaService } from '../../core/prisma/prisma.service.js';
 import type {
   CreatedStaffMemberDto,
@@ -28,7 +31,7 @@ import type {
   StaffMemberDto,
   UpdateStaffMemberDto,
 } from './dto/staff.dto.js';
-import { fieldError, WorkspacesService } from './workspaces.service.js';
+import { WorkspacesService } from './workspaces.service.js';
 
 /**
  * The people of a clinic: who they are (staff types, doctor profile) and
@@ -109,11 +112,7 @@ export class StaffService {
         staffTypeIds,
       );
       if (dto.staff_types.includes(DOCTOR_STAFF_TYPE)) {
-        await this.workspaces.ensureDoctorWorkspace(
-          tx,
-          actor.clinic_id,
-          created.id,
-        );
+        await ensureDoctorWorkspace(tx, actor.clinic_id, created.id);
       }
       for (const position of dto.positions ?? []) {
         await this.workspaces.addPosition(
@@ -156,10 +155,7 @@ export class StaffService {
   ): Promise<PasswordResetDto> {
     const membership = await this.membership(actor.clinic_id, membershipId);
     if (membership.user_id === actor.user_id) {
-      throw new ConflictException({
-        message: 'Use change password for your own account',
-        details: { reason: 'self' },
-      });
+      throw conflict('self', 'Use change password for your own account');
     }
     const otherClinics = await this.prisma.clinicMembership.count({
       where: {
@@ -169,10 +165,10 @@ export class StaffService {
       },
     });
     if (otherClinics > 0) {
-      throw new ConflictException({
-        message: 'This person is also a member of another clinic',
-        details: { reason: 'other_clinics' },
-      });
+      throw conflict(
+        'other_clinics',
+        'This person is also a member of another clinic',
+      );
     }
 
     const password = temporaryPassword();
@@ -235,11 +231,7 @@ export class StaffService {
         );
         const isDoctor = dto.staff_types.includes(DOCTOR_STAFF_TYPE);
         if (isDoctor) {
-          await this.workspaces.ensureDoctorWorkspace(
-            tx,
-            actor.clinic_id,
-            membershipId,
-          );
+          await ensureDoctorWorkspace(tx, actor.clinic_id, membershipId);
         }
         await tx.workspace.updateMany({
           where: {
@@ -372,29 +364,21 @@ export class StaffService {
     if (memberships.length === 0) return [];
     const ids = memberships.map((m) => m.id);
     const userIds = memberships.map((m) => m.user_id);
-    const [users, typeLinks, profiles, workspaces] = await Promise.all([
+    const [users, typesOf, profiles, workspaces] = await Promise.all([
       this.prisma.user.findMany({
         where: { id: { in: userIds } },
         select: { id: true, full_name: true, mobile: true },
       }),
-      this.prisma.membershipStaffType.findMany({
-        where: { membership_id: { in: ids } },
-      }),
+      staffTypesOf(this.prisma, ids),
       this.prisma.doctorProfile.findMany({
         where: { user_id: { in: userIds } },
       }),
       this.workspaces.ofMembers(clinicId, ids),
     ]);
-    const types = await this.prisma.staffType.findMany({
-      where: { id: { in: typeLinks.map((l) => l.staff_type_id) } },
-    });
     const user = new Map(users.map((u) => [u.id, u]));
-    const type = new Map(types.map((t) => [t.id, t.code]));
     const profile = new Map(profiles.map((p) => [p.user_id, p]));
     return memberships.map((m) => {
-      const staffTypes = typeLinks
-        .filter((l) => l.membership_id === m.id)
-        .flatMap((l) => type.get(l.staff_type_id) ?? []);
+      const staffTypes = typesOf.get(m.id) ?? [];
       const doctor = profile.get(m.user_id);
       return {
         membership_id: m.id,

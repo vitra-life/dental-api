@@ -4,7 +4,7 @@ model AuditLog {
   id                  String   @id @default(uuid(7)) @db.Char(36)
   clinic_id           String   @db.Char(36)
   actor_membership_id String   @db.Char(36)
-  /// e.g. role.created, permission.assigned, appointment.cancelled
+  /// e.g. workspace.permissions_set, client.deleted, appointment.cancelled
   action              String   @db.VarChar(64)
   resource_type       String   @db.VarChar(64)
   resource_id         String?  @db.Char(36)

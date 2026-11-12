@@ -16,7 +16,12 @@ import {
   hashPassword,
   temporaryPassword,
 } from '../src/common/auth/password.js';
+import { DOCTOR_STAFF_TYPE } from '../src/common/staff/doctors.js';
 import { toLatinDigits } from '../src/common/validators/transforms.js';
+import {
+  ensureAdminWorkspace,
+  ensureDoctorWorkspace,
+} from '../src/common/workspace/positions.js';
 import { mariadbConfig } from '../src/core/prisma/database-url.js';
 import { syncReferenceData } from '../src/modules/access/reference-data.js';
 
@@ -79,29 +84,7 @@ try {
     update: { is_active: true },
   });
   // The admin workspace: clinic-wide, holds every permission.
-  const admin = await prisma.workspace.findFirst({
-    where: {
-      clinic_id: clinic.id,
-      membership_id: membership.id,
-      kind: 'clinic',
-      is_admin: true,
-    },
-  });
-  if (admin) {
-    await prisma.workspace.update({
-      where: { id: admin.id },
-      data: { is_active: true },
-    });
-  } else {
-    await prisma.workspace.create({
-      data: {
-        clinic_id: clinic.id,
-        membership_id: membership.id,
-        kind: 'clinic',
-        is_admin: true,
-      },
-    });
-  }
+  await ensureAdminWorkspace(prisma, clinic.id, membership.id);
   for (const code of values['staff-type'] ?? []) {
     const type =
       (await prisma.staffType.findUnique({ where: { code } })) ??
@@ -121,24 +104,8 @@ try {
       update: {},
     });
     // A doctor also gets their own practice workspace (with no permissions yet).
-    if (code === 'doctor') {
-      const practice = await prisma.workspace.findFirst({
-        where: {
-          clinic_id: clinic.id,
-          membership_id: membership.id,
-          kind: 'doctor',
-        },
-      });
-      if (!practice) {
-        await prisma.workspace.create({
-          data: {
-            clinic_id: clinic.id,
-            membership_id: membership.id,
-            kind: 'doctor',
-            doctor_membership_id: membership.id,
-          },
-        });
-      }
+    if (code === DOCTOR_STAFF_TYPE) {
+      await ensureDoctorWorkspace(prisma, clinic.id, membership.id);
     }
   }
 

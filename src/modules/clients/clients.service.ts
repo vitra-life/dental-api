@@ -1,8 +1,4 @@
-import {
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import type { Client, Prisma } from '../../generated/prisma/client.js';
 import { audit } from '../../common/audit/audit.js';
 import type {
@@ -10,6 +6,7 @@ import type {
   WorkspaceContext,
 } from '../../common/auth/auth-request.js';
 import { clientScopeWhere } from '../../common/auth/access-scope.js';
+import { conflict } from '../../common/http/errors.js';
 import { Page, pageArgs } from '../../common/dto/page-query.dto.js';
 import {
   formatDateOnly,
@@ -22,6 +19,7 @@ import { ClientDto } from './dto/client.dto.js';
 import { CreateClientDto } from './dto/create-client.dto.js';
 import { ListClientsQueryDto } from './dto/list-clients-query.dto.js';
 import { UpdateClientDto } from './dto/update-client.dto.js';
+import type { Db } from '../../core/prisma/db.js';
 
 @Injectable()
 export class ClientsService {
@@ -215,7 +213,7 @@ export class ClientsService {
  * index would also count deleted ones, so this runs under `lockClinic`.
  */
 async function assertPhoneFree(
-  db: Pick<Prisma.TransactionClient, 'client'>,
+  db: Db,
   clinicId: string,
   phone: string,
   exceptId?: string,
@@ -230,10 +228,10 @@ async function assertPhoneFree(
     select: { id: true },
   });
   if (taken) {
-    throw new ConflictException({
-      message: 'The clinic already has a client with this phone number',
-      details: { reason: 'duplicate_phone' },
-    });
+    throw conflict(
+      'duplicate_phone',
+      'The clinic already has a client with this phone number',
+    );
   }
 }
 

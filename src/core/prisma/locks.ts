@@ -1,6 +1,7 @@
 import type { Prisma } from '../../generated/prisma/client.js';
 
-type Tx = Pick<Prisma.TransactionClient, '$queryRaw'>;
+/** Only a transaction client: outside a transaction the lock ends at once. */
+type Tx = Prisma.TransactionClient;
 
 /**
  * Row locks for "check, then write" rules that no unique index can enforce:
